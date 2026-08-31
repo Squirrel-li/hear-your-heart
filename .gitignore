@@ -1,0 +1,7 @@
+/project/*
+!/project/.gitkeep
+
+/tools/*
+!/tools/.gitkeep
+
+*.bkp

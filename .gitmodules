@@ -1,0 +1,9 @@
+[submodule "external/DFRobot_MAX98357A"]
+	path = external/DFRobot_MAX98357A
+	url = https://github.com/DFRobot/DFRobot_MAX98357A.git
+[submodule "external/HUB-8735"]
+	path = external/HUB-8735
+	url = https://github.com/ideashatch/HUB-8735.git
+[submodule "external/Adafruit_SH1106"]
+	path = external/Adafruit_SH1106
+	url = https://github.com/wonho-maker/Adafruit_SH1106.git
