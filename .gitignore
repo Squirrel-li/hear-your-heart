@@ -1,7 +1,86 @@
+# Project-local files that are intentionally kept out of version control.
 /project/*
 !/project/.gitkeep
 
 /tools/*
 !/tools/.gitkeep
 
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
+.idea/
+.vscode/*.user
+*.iml
+*.ipr
+*.iws
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Temporary, backup, and log files
 *.bkp
+*.bak
+*.tmp
+*.temp
+*.log
+*.swp
+*.swo
+*~
+
+# Flutter / Dart generated files
+.dart_tool/
+.pub-cache/
+.pub/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+coverage/
+
+# Android / Gradle generated files
+.gradle/
+.kotlin/
+local.properties
+captures/
+.cxx/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+*.apk
+*.aab
+
+# iOS generated files
+Pods/
+DerivedData/
+xcuserdata/
+**/Flutter/ephemeral/
+
+# Arduino build output
+arduino_build*/
+arduino_cache*/
+*.elf
+*.eep
+*.hex
+*.bin
+*.map
+*.o
+
+# Python tooling caches (for future project utilities)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Other local dependency / environment files
+node_modules/
+.env
+.env.*
+!.env.example
