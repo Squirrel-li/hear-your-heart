@@ -4,9 +4,6 @@
 [submodule "external/libraries/Adafruit_SH1106"]
 	path = external/libraries/Adafruit_SH1106
 	url = https://github.com/wonho-maker/Adafruit_SH1106.git
-[submodule "external/libraries/MAX98357-HUB8735"]
-	path = external/libraries/MAX98357-HUB8735
-	url = https://github.com/YuakaTL/MAX98357-HUB8735.git
 [submodule "external/libraries/Adafruit_BusIO"]
 	path = external/libraries/Adafruit_BusIO
 	url = https://github.com/adafruit/Adafruit_BusIO.git
@@ -19,3 +16,6 @@
 [submodule "external/libraries/JQ6500_Serial"]
 	path = external/libraries/JQ6500_Serial
 	url = https://github.com/Squirrel-li/JQ6500_Serial.git
+[submodule "external/libraries/MAX98357"]
+	path = external/libraries/MAX98357
+	url = https://github.com/Squirrel-li/MAX98357.git
