@@ -5,6 +5,8 @@
 /tools/*
 !/tools/.gitkeep
 
+.codegraph/
+
 # OS-generated files
 .DS_Store
 Thumbs.db
