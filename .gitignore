@@ -86,3 +86,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Agent-local memory and state
+/.agents/*
+!/.agents/agent.md
