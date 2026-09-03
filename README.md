@@ -6,20 +6,25 @@
 
 ```text
 hear-your-heart/
-├── assets/                    # 硬體架構圖與專案素材
-├── doc/                       # 參考文件
-├── external/                  # 外部工具包與第三方函式庫
-├── project/                   # 專題規劃、簡報與行政文件
-├── scr/
-│   ├── embbed_loudspeaker/    # 嵌入式揚聲器程式
-│   ├── phone_app/             # Flutter 行動應用程式
-│   │   ├── assets/audio/      # 展示用音訊
-│   │   ├── lib/               # APP 主要程式碼
-│   │   ├── test/              # Flutter 測試
-│   │   └── tool/              # 輔助工具
-│   └── remote_sensor/         # 穿戴式感測與資料傳輸程式
-├── test/                      # 開發板與周邊元件測試
-├── tools/                     # 開發工具
+├── apps/                      # 可獨立建置的應用程式
+│   └── phone/                 # Flutter 行動應用程式
+├── assets/
+│   └── hardware/              # 硬體架構圖與相關文件
+├── docs/                      # 專案文件與參考資料
+│   ├── ble/
+│   ├── hub8735/
+│   └── references/
+├── external/                  # 外部 SDK 與第三方函式庫子模組
+├── firmware/
+│   ├── hub8735-ultra/
+│   │   ├── application/       # HUB8735 Ultra 主程式
+│   │   ├── examples/          # BLE、音訊、顯示、檔案系統與影像範例
+│   │   └── testdata/          # 韌體測試資料
+│   └── remote_sensor/
+│       ├── scripts/           # UART、燒錄與測試腳本
+│       └── device/            # remote sensor MCU / BLE 韌體
+├── project/                   # 本機專題文件（不納入 Git）
+├── tools/                     # 本機開發工具（不納入 Git）
 └── README.md
 ```
 
