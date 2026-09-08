@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
- [ValidateSet('Ports','Version','Status','Name','Advertise','Power','Send','Receive','Counter','Save','Shell')][string]$Command='Shell',
+ [ValidateSet('Ports','Version','Status','Name','Advertise','Power','Send','Receive','Counter','Save','Shell','Web')][string]$Command='Shell',
  [string]$Port='COM11', [ValidateRange(1,4000000)][int]$Baud=115200,
  [string]$Value='', [ValidateSet('Hex','Text')][string]$Encoding='Hex',
  [ValidateRange(100,60000)][int]$TimeoutMs=3000,
  [ValidateRange(0,86400)][int]$Seconds=0,
  [ValidateRange(1,65536)][int]$Count=100,
- [ValidateRange(10,60000)][int]$IntervalMs=100, [string]$LogPath
+ [ValidateRange(10,60000)][int]$IntervalMs=100,
+ [ValidateRange(1024,65535)][int]$HttpPort=8771, [string]$LogPath
 )
 $ErrorActionPreference='Stop'
 function ConvertTo-BmBytes([string]$Text,[string]$Format='Hex') {
@@ -49,13 +50,19 @@ function Write-BmLog([string]$Message) {
  $line='{0} {1}' -f [DateTimeOffset]::Now.ToString('o'),$Message
  Write-Host $line
  if ($script:LogPath) { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 }
+ if ($null -ne $script:WebLog) {
+  $script:WebLogId++
+  $script:WebLog.Add([pscustomobject]@{id=$script:WebLogId;text=$line})
+  if ($script:WebLog.Count -gt 2000) { $script:WebLog.RemoveAt(0) }
+ }
 }
 function Show-BmFrame($Frame) {
  Write-BmLog ('RX {0} | type=0x{1:X4} status=0x{2:X2}' -f (Format-BmHex $Frame.Raw),$Frame.Type,$Frame.Status)
  if ($Frame.Type -eq 0xFFF2) {
   Write-BmLog ('BLE WRITE {0} | UTF8={1}' -f (Format-BmHex $Frame.Data),([Text.Encoding]::UTF8.GetString($Frame.Data) -replace '[\x00-\x1F\x7F]','.'))
  } elseif ($Frame.Type -eq 0 -and $Frame.Data.Length -gt 0) {
-  Write-BmLog ('LINK connected={0}; raw status={1}' -f (($Frame.Data[0] -band 1) -ne 0),(Format-BmHex $Frame.Data))
+  $script:LinkConnected=(($Frame.Data[0] -band 1) -ne 0)
+  Write-BmLog ('LINK connected={0}; raw status={1}' -f $script:LinkConnected,(Format-BmHex $Frame.Data))
  }
 }
 function Read-BmFrames {
@@ -99,7 +106,9 @@ function Wait-BmData([int]$Milliseconds) {
  $deadline=$script:Clock.ElapsedMilliseconds+$Milliseconds
  do { $null=@(Read-BmFrames);Start-Sleep -Milliseconds 5 } while ($script:Clock.ElapsedMilliseconds -lt $deadline)
 }
-function Invoke-BmAction([string]$Action,[string]$Argument='',[string]$Format='Hex') {
+function Invoke-BmAction([string]$Action,[string]$Argument='',[string]$Format='Hex',[int]$ActionCount=0,[int]$ActionIntervalMs=0) {
+ if ($ActionCount -le 0) { $ActionCount=$script:Count }
+ if ($ActionIntervalMs -le 0) { $ActionIntervalMs=$script:IntervalMs }
  switch ($Action.ToLowerInvariant()) {
   'version' { $null=Invoke-BmCommand 0x20 }
   'status' { $null=Invoke-BmCommand 0 }
@@ -121,19 +130,131 @@ function Invoke-BmAction([string]$Action,[string]$Argument='',[string]$Format='H
    # ponytail: conservative library limit (<128); no fragmentation until MTU is verified.
    if ($data.Length -lt 1 -or $data.Length -gt 127) { throw 'Send requires 1..127 bytes; start with <=20 bytes.' }
    $null=Invoke-BmCommand 0xFFF1 0x20 $data
-   Write-BmLog 'UART ACK only; verify delivery in the tablet notification log.'
+   Write-BmLog 'UART ACK only; verify delivery in the BLE client notification log.'
   }
   'counter' {
-   for ($i=0;$i -lt $script:Count;$i++) {
+   for ($i=0;$i -lt $ActionCount;$i++) {
     $data=[byte[]]@(0x42,0x4D,($i -band 255),($i -shr 8),0,1,2,3,4,5)
     $null=Invoke-BmCommand 0xFFF1 0x20 $data
-    Wait-BmData $script:IntervalMs
+    Wait-BmData $ActionIntervalMs
    }
-   Write-BmLog ('Counter complete: {0} UART ACKs; compare tablet results.' -f $script:Count)
+   Write-BmLog ('Counter complete: {0} UART ACKs; compare BLE client results.' -f $ActionCount)
   }
   'save' { $null=Invoke-BmCommand 0x10 0x10 ([byte[]]@(0x10,0,0,0));Write-BmLog 'Flash save requested. No automatic reset.' }
   default { throw "Unknown action: $Action" }
  }
+}
+
+function ConvertFrom-BmWebAction($Payload) {
+ if ($null -eq $Payload -or [string]::IsNullOrWhiteSpace([string]$Payload.action)) { throw 'API action is required.' }
+ $action=([string]$Payload.action).ToLowerInvariant()
+ if ($action -notin @('version','status','name','advertise','power','send','counter','save')) { throw "Unsupported API action: $action" }
+ $format=if ($null -eq $Payload.encoding -or [string]::IsNullOrWhiteSpace([string]$Payload.encoding)) { 'Hex' } else { [string]$Payload.encoding }
+ if ($format -notin @('Hex','Text')) { throw 'API encoding must be Hex or Text.' }
+ $argument=if ($null -eq $Payload.value) { '' } else { [string]$Payload.value }
+ $count=if ($null -eq $Payload.count -or [string]::IsNullOrWhiteSpace([string]$Payload.count)) { $script:Count } else { [int]$Payload.count }
+ $interval=if ($null -eq $Payload.intervalMs -or [string]::IsNullOrWhiteSpace([string]$Payload.intervalMs)) { $script:IntervalMs } else { [int]$Payload.intervalMs }
+ if ($count -lt 1 -or $count -gt 65536) { throw 'API count must be 1..65536.' }
+ if ($interval -lt 10 -or $interval -gt 60000) { throw 'API intervalMs must be 10..60000.' }
+ [pscustomobject]@{Action=$action;Argument=$argument;Format=$format;Count=$count;IntervalMs=$interval}
+}
+
+function Write-BmWebResponse([System.Net.HttpListenerContext]$Context,[int]$StatusCode,[string]$ContentType,[byte[]]$Bytes) {
+ $Context.Response.StatusCode=$StatusCode
+ $Context.Response.ContentType=$ContentType
+ $Context.Response.ContentEncoding=[Text.Encoding]::UTF8
+ $Context.Response.ContentLength64=$Bytes.Length
+ try { $Context.Response.OutputStream.Write($Bytes,0,$Bytes.Length) } finally { $Context.Response.Close() }
+}
+
+function Write-BmWebJson([System.Net.HttpListenerContext]$Context,[int]$StatusCode,$Value) {
+ $json=([string]($Value | ConvertTo-Json -Depth 6 -Compress))
+ Write-BmWebResponse $Context $StatusCode 'application/json; charset=utf-8' ([Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function Read-BmWebBody([System.Net.HttpListenerContext]$Context) {
+ $max=16384
+ $stream=$Context.Request.InputStream
+ $buffer=[byte[]]::new(4096)
+ $memory=New-Object IO.MemoryStream
+ try {
+  while (($read=$stream.Read($buffer,0,$buffer.Length)) -gt 0) {
+   if ($memory.Length+$read -gt $max) { throw 'Request body too large.' }
+   $memory.Write($buffer,0,$read)
+  }
+  return [Text.Encoding]::UTF8.GetString($memory.ToArray())
+ } finally { $memory.Dispose() }
+}
+
+function Invoke-BmWebRequest([System.Net.HttpListenerContext]$Context) {
+ $path=$Context.Request.Url.AbsolutePath
+ try {
+  if ($Context.Request.HttpMethod -eq 'GET' -and ($path -eq '/' -or $path -eq '/ble-test.html')) {
+   $html=[IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'ble-test.html'))
+   Write-BmWebResponse $Context 200 'text/html; charset=utf-8' $html
+   return
+  }
+  if ($Context.Request.HttpMethod -eq 'GET' -and $path -eq '/api/state') {
+   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;port=$script:Port;baud=$script:Baud;connected=[bool]$script:LinkConnected;logId=$script:WebLogId})
+   return
+  }
+  if ($Context.Request.HttpMethod -eq 'GET' -and $path -eq '/api/events') {
+   $after=0L
+   if ($Context.Request.QueryString['after']) { $after=[long]$Context.Request.QueryString['after'] }
+   $events=@($script:WebLog | Where-Object { $_.id -gt $after })
+   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;events=$events;lastId=$script:WebLogId})
+   return
+  }
+  if ($Context.Request.HttpMethod -eq 'POST' -and $path -eq '/api/action') {
+   $payload=(Read-BmWebBody $Context | ConvertFrom-Json)
+   $action=ConvertFrom-BmWebAction $payload
+   Invoke-BmAction $action.Action $action.Argument $action.Format $action.Count $action.IntervalMs
+   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;action=$action.Action})
+   return
+  }
+  Write-BmWebJson $Context 404 ([pscustomobject]@{ok=$false;error='Not found.'})
+ } catch {
+  Write-BmWebJson $Context 400 ([pscustomobject]@{ok=$false;error=$_.Exception.Message})
+ }
+}
+
+function Start-BmWebListener([int]$WebPort) {
+$script:WebListener=[Net.HttpListener]::new()
+$script:WebListener.Prefixes.Add("http://127.0.0.1:$WebPort/")
+$script:WebListener.Start()
+ $script:WebTask=$script:WebListener.GetContextAsync()
+}
+
+function Process-BmWebRequests {
+ if ($null -eq $script:WebTask -or -not $script:WebTask.IsCompleted) { return }
+ try { $context=$script:WebTask.GetAwaiter().GetResult() } catch { return }
+ try {
+  $script:WebTask=$script:WebListener.GetContextAsync()
+  Invoke-BmWebRequest $context
+ } catch {
+  Write-BmLog ('WEB ERROR '+$_.Exception.Message)
+}
+}
+
+function Stop-BmWebListener {
+ if ($null -ne $script:WebListener) {
+  try { $script:WebListener.Stop() } catch { }
+  try { $script:WebListener.Close() } catch { }
+  $script:WebListener=$null
+ }
+}
+
+function Start-BmWeb {
+ Start-BmWebListener $script:HttpPort
+ Write-BmLog "WEB http://127.0.0.1:$($script:HttpPort)/"
+ $clock=[Diagnostics.Stopwatch]::StartNew()
+ try {
+  while ($script:Seconds -eq 0 -or $clock.Elapsed.TotalSeconds -lt $script:Seconds) {
+   $null=@(Read-BmFrames)
+   Process-BmWebRequests
+   Start-Sleep -Milliseconds 10
+  }
+ } finally { Stop-BmWebListener }
 }
 function Start-BmShell {
  Write-Host 'Commands: version | status | name TEXT | advertise on/off | power 0..15 | send HEX | text TEXT | counter | save | quit'
@@ -163,6 +284,8 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 if ($Command -eq 'Ports') { [IO.Ports.SerialPort]::GetPortNames() | Sort-Object;return }
 $script:Serial=$null
 try {
+ $script:Port=$Port;$script:Baud=$Baud;$script:HttpPort=$HttpPort;$script:Count=$Count;$script:IntervalMs=$IntervalMs;$script:Seconds=$Seconds
+ $script:WebLog=[Collections.Generic.List[object]]::new();$script:WebLogId=0;$script:LinkConnected=$false
  if ($LogPath) { Add-Content -LiteralPath $LogPath -Value '# BM7701 session' -Encoding UTF8 }
  $script:Parser=New-BmParser
  $script:Clock=[Diagnostics.Stopwatch]::StartNew()
@@ -178,7 +301,8 @@ try {
  switch ($Command) {
   'Shell' { Start-BmShell }
   'Receive' { if ($Seconds -eq 0) { while ($true) { Wait-BmData 100 } } else { Wait-BmData ($Seconds*1000) } }
+  'Web' { Start-BmWeb }
   default { Invoke-BmAction $Command $Value $Encoding }
  }
 } catch { Write-Error $_ -ErrorAction Continue;exit 1 }
-finally { if ($null -ne $script:Serial) { $script:Serial.Dispose() } }
+finally { Stop-BmWebListener; if ($null -ne $script:Serial) { $script:Serial.Dispose() } }

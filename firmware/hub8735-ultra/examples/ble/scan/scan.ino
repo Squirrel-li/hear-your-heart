@@ -18,10 +18,12 @@ void scanFunction(T_LE_CB_DATA* p_data)
 
     foundDevice.parseScanInfo(p_data);
     if (foundDevice.hasName()) {
-        if (foundDevice.getName() == String("AMEBA_BLE_DEV")) {
-            Serial.print("Found Ameba BLE Device at address ");
-            Serial.println(foundDevice.getAddr().str());
-        }
+        // if (foundDevice.getName() == String("BM7701-ITAP")) {
+        //     Serial.print("Found BM7701-ITAP at address ");
+        //     Serial.println(foundDevice.getAddr().str());
+        // }
+        Serial.print("Found " + String(foundDevice.getName()) + " at address ");
+        Serial.println(foundDevice.getAddr().str());
     }
     uint8_t serviceCount = foundDevice.getServiceCount();
     if (serviceCount > 0) {
