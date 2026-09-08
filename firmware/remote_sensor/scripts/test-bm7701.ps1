@@ -11,6 +11,13 @@ Reject { ConvertTo-BmBytes '0' };Reject { ConvertTo-BmBytes 'GG' };Reject { Conv
 Reject { New-BmFrame 65536 };Reject { New-BmFrame 1 0 ([byte[]]::new(253)) }
 Reject { Invoke-BmAction name ('x'*32) };Reject { Invoke-BmAction power '16' };Reject { Invoke-BmAction advertise 'yes' }
 Reject { Invoke-BmAction send '' };Reject { Invoke-BmAction send ('AB'*128) }
+$script:Count=100;$script:IntervalMs=100
+$webAction=ConvertFrom-BmWebAction ([pscustomobject]@{action='send';value='00 FF';encoding='Hex'})
+Assert ($webAction.Action -eq 'send' -and $webAction.Argument -eq '00 FF' -and $webAction.Format -eq 'Hex') 'web action parsing'
+Reject { ConvertFrom-BmWebAction ([pscustomobject]@{action='shell'}) }
+Reject { ConvertFrom-BmWebAction ([pscustomobject]@{action='send';encoding='Base64'}) }
+Reject { ConvertFrom-BmWebAction ([pscustomobject]@{action='counter';count=0}) }
+Reject { ConvertFrom-BmWebAction ([pscustomobject]@{action='counter';intervalMs=9}) }
 # All possible two-chunk boundaries, payload containing header byte, and interleaved asynchronous data.
 $stream=[byte[]]@(0,255,0x78,2,0,0x78,4,0,0xF2,0xFF,0x78,0x78,3,0x20,0xF1,0xFF,0x78,4,0,0,0,1)
 for ($split=1;$split -lt $stream.Length;$split++) {
