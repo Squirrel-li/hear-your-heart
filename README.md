@@ -23,11 +23,9 @@ hear-your-heart/
 │   └── remote_sensor/
 │       ├── scripts/           # UART、燒錄與測試腳本
 │       └── device/            # remote sensor MCU / BLE 韌體
-├── project/                   # 本機專題文件（不納入 Git）
-├── tools/                     # 本機開發工具（不納入 Git）
+├── project/                   # 本機專題文件
+├── tools/                     # 本機開發工具
 └── README.md
 ```
-
-目前 Flutter APP 使用模擬感測資料展示完整操作流程，並保留 BLE 實體感測器的接入介面。
 
 > 本專案僅供專題研究與展示使用，不提供醫療診斷。
