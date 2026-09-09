@@ -58,4 +58,23 @@ $script:LastByteAt=$script:Clock.ElapsedMilliseconds-200
 $null=@(Read-BmFrames)
 Assert ($script:Parser.Buffer.Count -eq 0) 'expired partial packet cleared'
 Write-Host 'PASS: actual transaction loop preserves asynchronous data, rejects device errors, times out and expires partial frames.'
+# Web mode actions are queued and advanced by returned frames instead of blocking the HTTP loop.
+$script:WebLog=[Collections.Generic.List[object]]::new();$script:WebLogId=0;$script:WebAction=$null;$script:TimeoutMs=100;$script:Clock=[Diagnostics.Stopwatch]::StartNew()
+$script:Serial.Reply=[byte[]]@(0x78,3,0,0x20,0)
+$webVersion=ConvertFrom-BmWebAction ([pscustomobject]@{action='version'})
+Start-BmWebAction $webVersion
+Assert ($script:WebAction.Phase -eq 'ready') 'web action queued'
+Process-BmWebAction ([object[]]@())
+Assert ($script:WebAction.Phase -eq 'wait') 'web action sent without waiting in HTTP request'
+Process-BmWebAction ([object[]]@([pscustomobject]@{Type=0x20;Status=0}))
+Assert ($null -eq $script:WebAction) 'web action completed from ACK'
+Write-Host 'PASS: Web action queue returns before ACK and completes from main-loop frames.'
+$script:TimeoutMs=100
+Start-BmWebAction $webVersion
+Process-BmWebAction ([object[]]@())
+Start-Sleep -Milliseconds 150
+Process-BmWebAction ([object[]]@())
+Assert ($script:WebAction.Phase -eq 'cooldown') 'web timeout cooldown'
+$script:WebAction=$null;$script:TimeoutMs=100
+Write-Host 'PASS: Web timeout enters cooldown before accepting another action.'
 

@@ -159,6 +159,89 @@ function ConvertFrom-BmWebAction($Payload) {
  [pscustomobject]@{Action=$action;Argument=$argument;Format=$format;Count=$count;IntervalMs=$interval}
 }
 
+function New-BmWebAction($Action) {
+ $job=[pscustomobject]@{Name=$Action.Action;Argument=$Action.Argument;Format=$Action.Format;Count=$Action.Count;IntervalMs=$Action.IntervalMs;Index=0;Phase='ready';Type=0;Flag=0;Data=[byte[]]@();Deadline=0L;NextAt=0L}
+ switch ($Action.Action) {
+  'version' { $job.Type=0x20 }
+  'status' { $job.Type=0 }
+  'name' {
+   $job.Data=ConvertTo-BmBytes $Action.Argument Text
+   if ($job.Data.Length -lt 1 -or $job.Data.Length -gt 31 -or $Action.Argument -match '[\x00-\x1F\x7F]') { throw 'Name must be 1..31 UTF-8 bytes without control characters.' }
+   $job.Type=5
+  }
+  'advertise' {
+   if ($Action.Argument -notin @('on','off')) { throw 'Advertise requires on or off.' }
+   $job.Data=[byte[]]@([byte]($Action.Argument -eq 'on'));$job.Type=7
+  }
+  'power' {
+   if ($Action.Argument -notmatch '^(?:[0-9]|1[0-5])$') { throw 'Power must be 0..15.' }
+   $job.Data=[byte[]]@([byte]$Action.Argument);$job.Type=11
+  }
+  'send' {
+   $job.Data=ConvertTo-BmBytes $Action.Argument $Action.Format
+   if ($job.Data.Length -lt 1 -or $job.Data.Length -gt 127) { throw 'Send requires 1..127 bytes; start with <=20 bytes.' }
+   $job.Type=0xFFF1;$job.Flag=0x20
+  }
+  'save' { $job.Data=[byte[]]@(0x10,0,0,0);$job.Type=0x10;$job.Flag=0x10 }
+  'counter' { $job.Type=0xFFF1;$job.Flag=0x20 }
+ }
+ return $job
+}
+
+function Start-BmWebAction($Action) {
+ if ($null -ne $script:WebAction) { throw 'Another BM7701 web action is still running.' }
+ $script:WebAction=New-BmWebAction $Action
+ Write-BmLog ('WEB ACTION queued: {0}' -f $Action.Action)
+}
+
+function Complete-BmWebAction($Job) {
+ if ($Job.Name -eq 'counter') { Write-BmLog ('Counter complete: {0} UART ACKs; compare BLE client results.' -f $Job.Count) }
+ elseif ($Job.Name -eq 'send') { Write-BmLog 'UART ACK only; verify delivery in the BLE client notification log.' }
+ else { Write-BmLog ('WEB ACTION complete: {0}' -f $Job.Name) }
+ $script:WebAction=$null
+}
+
+function Fail-BmWebAction($Job,[string]$Message) {
+ Write-BmLog ('WEB ACTION ERROR {0}: {1}' -f $Job.Name,$Message)
+ # ponytail: short cooldown drops late ACKs because BCI has no transaction ID.
+ $script:WebAction=[pscustomobject]@{Name='cooldown';Phase='cooldown';NextAt=$script:Clock.ElapsedMilliseconds+$script:TimeoutMs}
+}
+
+function Send-BmWebCommand($Job) {
+ if ($Job.Name -eq 'counter') { $Job.Data=[byte[]]@(0x42,0x4D,($Job.Index -band 255),($Job.Index -shr 8),0,1,2,3,4,5) }
+ $raw=New-BmFrame $Job.Type $Job.Flag $Job.Data
+ Write-BmLog ('TX '+(Format-BmHex $raw))
+ $script:Serial.Write($raw,0,$raw.Length)
+ $Job.Phase='wait';$Job.Deadline=$script:Clock.ElapsedMilliseconds+$script:TimeoutMs
+}
+
+function Process-BmWebAction($Frames) {
+ $job=$script:WebAction
+ if ($null -eq $job) { return }
+ $now=$script:Clock.ElapsedMilliseconds
+ if ($job.Phase -eq 'cooldown') { if ($now -ge $job.NextAt) { $script:WebAction=$null };return }
+ if ($job.Phase -eq 'ready') { Send-BmWebCommand $job;return }
+ if ($job.Phase -eq 'delay') {
+  if ($now -lt $job.NextAt) { return }
+  Send-BmWebCommand $job;return
+ }
+ if ($job.Phase -ne 'wait') { return }
+ $match=$null
+ foreach ($frame in @($Frames)) { if ($null -eq $match -and (Test-BmReply $frame $job.Type $job.Flag)) { $match=$frame } }
+ if ($null -ne $match) {
+  try {
+   Assert-BmSuccess $match
+   if ($job.Name -eq 'counter') {
+    $job.Index++
+    if ($job.Index -ge $job.Count) { Complete-BmWebAction $job }
+    else { $job.NextAt=$now+$job.IntervalMs;$job.Phase='delay' }
+   } else { Complete-BmWebAction $job }
+  } catch { Fail-BmWebAction $job $_.Exception.Message }
+  return
+ }
+ if ($now -ge $job.Deadline) { Fail-BmWebAction $job ('Timeout waiting for 0x{0:X4}; action cancelled.' -f $job.Type) }
+}
+
 function Write-BmWebResponse([System.Net.HttpListenerContext]$Context,[int]$StatusCode,[string]$ContentType,[byte[]]$Bytes) {
  $Context.Response.StatusCode=$StatusCode
  $Context.Response.ContentType=$ContentType
@@ -195,7 +278,7 @@ function Invoke-BmWebRequest([System.Net.HttpListenerContext]$Context) {
    return
   }
   if ($Context.Request.HttpMethod -eq 'GET' -and $path -eq '/api/state') {
-   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;port=$script:Port;baud=$script:Baud;connected=[bool]$script:LinkConnected;logId=$script:WebLogId})
+   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;port=$script:Port;baud=$script:Baud;connected=[bool]$script:LinkConnected;busy=($null -ne $script:WebAction);action=if ($null -eq $script:WebAction) { $null } else { $script:WebAction.Name };logId=$script:WebLogId})
    return
   }
   if ($Context.Request.HttpMethod -eq 'GET' -and $path -eq '/api/events') {
@@ -208,8 +291,8 @@ function Invoke-BmWebRequest([System.Net.HttpListenerContext]$Context) {
   if ($Context.Request.HttpMethod -eq 'POST' -and $path -eq '/api/action') {
    $payload=(Read-BmWebBody $Context | ConvertFrom-Json)
    $action=ConvertFrom-BmWebAction $payload
-   Invoke-BmAction $action.Action $action.Argument $action.Format $action.Count $action.IntervalMs
-   Write-BmWebJson $Context 200 ([pscustomobject]@{ok=$true;action=$action.Action})
+   Start-BmWebAction $action
+   Write-BmWebJson $Context 202 ([pscustomobject]@{ok=$true;action=$action.Action;queued=$true})
    return
   }
   Write-BmWebJson $Context 404 ([pscustomobject]@{ok=$false;error='Not found.'})
@@ -250,8 +333,9 @@ function Start-BmWeb {
  $clock=[Diagnostics.Stopwatch]::StartNew()
  try {
   while ($script:Seconds -eq 0 -or $clock.Elapsed.TotalSeconds -lt $script:Seconds) {
-   $null=@(Read-BmFrames)
+   $frames=@(Read-BmFrames)
    Process-BmWebRequests
+   Process-BmWebAction $frames
    Start-Sleep -Milliseconds 10
   }
  } finally { Stop-BmWebListener }
@@ -285,7 +369,7 @@ if ($Command -eq 'Ports') { [IO.Ports.SerialPort]::GetPortNames() | Sort-Object;
 $script:Serial=$null
 try {
  $script:Port=$Port;$script:Baud=$Baud;$script:HttpPort=$HttpPort;$script:Count=$Count;$script:IntervalMs=$IntervalMs;$script:Seconds=$Seconds
- $script:WebLog=[Collections.Generic.List[object]]::new();$script:WebLogId=0;$script:LinkConnected=$false
+ $script:WebLog=[Collections.Generic.List[object]]::new();$script:WebLogId=0;$script:LinkConnected=$false;$script:WebAction=$null
  if ($LogPath) { Add-Content -LiteralPath $LogPath -Value '# BM7701 session' -Encoding UTF8 }
  $script:Parser=New-BmParser
  $script:Clock=[Diagnostics.Stopwatch]::StartNew()

@@ -67,8 +67,10 @@ powershell -NoProfile -File .\bm7701.ps1 -Command Counter -Count 100 -IntervalMs
 2. 點「選擇 BM7701 並連線」，選 BM7701-ITAP。
 3. FFF0 中預期 FFF1 支援 Notify、FFF2 支援 Write Without Response；以實際探索屬性為準。
 4. FFF1 點「開始通知／指示」；FFF2 可用「寫入（無回覆）」測試 8735 → BM7701 方向。
-5. 上方 UART 控制區可呼叫同一個腳本設定名稱、廣播、功率、發送 FFF1 與 counter。
+5. 左側 UART 控制區可呼叫同一個腳本設定名稱、廣播、功率、發送 FFF1 與 counter。
 6. 其他服務可輸入 1800、1801、180A、180F 後重新連線探索；不支援的操作不顯示。
+7. 網頁採左右兩欄：左側只放 BM7701 UART 控制與 UART 發送資料；右側放電腦 BLE 連線、通知接收、資料比對、Characteristics 與日誌。窄螢幕會自動改為上下排列。
+8. UART Web 動作會先回覆「已排程」，再由同一個腳本主迴圈逐步等待 ACK；counter 或 BM7701 暫時無回覆時，右側 BLE 操作與事件日誌仍可繼續使用。
 
 日誌最多 2,000 筆，超過丟棄最舊資料；長測試定期匯出。UTF-8 顯示只供觀察，binary 比對以 HEX 為準。頁面只針對開發測試，不包含感測器解析或背景自動重連。
 
