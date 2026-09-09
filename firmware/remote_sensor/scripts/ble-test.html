@@ -4,10 +4,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BM7701 BLE 測試</title>
 <style>
-:root{font-family:system-ui,sans-serif;color:#182b35;background:#f1f5f6;color-scheme:light}body{max-width:1050px;margin:auto;padding:24px}h1{margin-bottom:4px}p{line-height:1.6}section,article{background:white;border:1px solid #ccd8dc;border-radius:12px;padding:18px;margin:16px 0}label{display:block;margin:10px 0}input,textarea,select,button{font:inherit;border:1px solid #81969f;border-radius:6px;padding:10px;box-sizing:border-box}input,textarea{width:100%;background:#fff}button{background:#eaf3f4;color:#12383d;cursor:pointer;min-height:44px;margin:4px}button.primary{background:#076873;color:white}button:disabled{opacity:.45;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #d67a00;outline-offset:2px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.muted{color:#52646c}.uuid{font-family:monospace;overflow-wrap:anywhere}output,pre{display:block;white-space:pre-wrap;overflow-wrap:anywhere;background:#eff4f5;padding:12px;border-radius:6px}#log{max-height:360px;overflow:auto;font-size:13px}.badge{font-weight:600;color:#075861}h2{font-size:1.2rem}small{line-height:1.5}article{background:#fafcfc}textarea{min-height:70px}
+:root{font-family:system-ui,sans-serif;color:#182b35;background:#f1f5f6;color-scheme:light}body{max-width:1440px;margin:auto;padding:24px}h1{margin-bottom:4px}p{line-height:1.6}section,article{background:white;border:1px solid #ccd8dc;border-radius:12px;padding:18px;margin:16px 0}label{display:block;margin:10px 0}input,textarea,select,button{font:inherit;border:1px solid #81969f;border-radius:6px;padding:10px;box-sizing:border-box}input,textarea{width:100%;background:#fff}button{background:#eaf3f4;color:#12383d;cursor:pointer;min-height:44px;margin:4px}button.primary{background:#076873;color:white}button:disabled{opacity:.45;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #d67a00;outline-offset:2px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.muted{color:#52646c}.uuid{font-family:monospace;overflow-wrap:anywhere}output,pre{display:block;white-space:pre-wrap;overflow-wrap:anywhere;background:#eff4f5;padding:12px;border-radius:6px}#log{max-height:360px;overflow:auto;font-size:13px}.badge{font-weight:600;color:#075861}h2{font-size:1.2rem}small{line-height:1.5}article{background:#fafcfc}textarea{min-height:70px}.workspace{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:16px;align-items:start}.panel{min-width:0}.controller-panel{position:sticky;top:12px}.panel>section:first-child{margin-top:16px}@media(max-width:900px){body{padding:12px}.workspace{grid-template-columns:1fr}.controller-panel{position:static}}
 </style>
 <h1>BM7701 控制與 BLE 測試</h1>
 <p class="muted">本頁由 <code>bm7701.ps1 -Command Web</code> 提供：UART 控制走同一個腳本，BLE 服務測試使用這台電腦的內建 Bluetooth。</p>
+<div class='workspace'>
+<div class='panel controller-panel'>
+<section>
+<h2>UART 發送資料</h2>
+<label>格式 <select id='uartEncoding'><option value='hex'>HEX</option><option value='text'>UTF-8 文字</option></select></label>
+<label>資料<textarea id='uartPayload'>00 01 02 03 04 05 06 07 08 09</textarea></label>
+</section>
 <section>
 <h2>1 · BM7701 UART 控制</h2>
 <div class="row"><button id="uartRefresh">讀取腳本狀態</button><button id="uartVersion">讀取版本</button><button id="uartStatus">讀取狀態</button><button id="uartAdvertiseOn">開始廣播</button><button id="uartAdvertiseOff">停止廣播</button></div>
@@ -19,8 +26,11 @@
 <output id="uartState" role="status">尚未連接 bm7701.ps1 Web API</output>
 <p class="muted">網頁不直接開啟 COM。若 API 尚未啟動，請先在 PowerShell 執行 Web 模式；本區按鈕只呼叫固定的 BM7701 操作。</p>
 </section>
+<!-- receiver panel starts after the BM7701 controls -->
+</div>
+<div class='panel receiver-panel'>
 <section>
-<h2>2 · BLE 連線與服務探索</h2>
+<h2>2 · 電腦接收／BLE 操作</h2>
 <label>額外 Service UUID（逗號或空白分隔；FFF0 已包含）<input id="services" placeholder="例如 180A, 180F 或完整 128-bit UUID" autocomplete="off"></label>
 <div class="row"><button id="connect" class="primary">選擇 BM7701 並連線</button><button id="disconnect" disabled>斷線</button><button id="readall" disabled>讀取所有可讀值</button><button id="export">匯出日誌</button><button id="selftest">離線自我檢查</button></div>
 <output id="state" role="status">尚未連線</output>
@@ -36,12 +46,14 @@
 </section>
 <section><h2>4 · Characteristics</h2><div id="characteristics">連線後顯示 UUID、屬性與可用操作。</div></section>
 <section><h2>5 · 事件日誌</h2><small>最多保留最近 2,000 筆；長測試請定期匯出。腳本 UART 事件會以 SCRIPT 顯示，BLE 操作會以 BLE 顯示。</small><pre id="log" aria-label="事件日誌"></pre></section>
+</div>
+</div>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
 const full=n=>`0000${n}-0000-1000-8000-00805f9b34fb`;
 const FFF1=full('fff1');
- let device=null, generation=0, busy=false, entries=[], records=[], expected=null, counter=null, apiEventId=0, apiUnavailable=false, apiTimer=null;
+ let device=null, generation=0, busy=false, entries=[], records=[], expected=null, counter=null, apiEventId=0, apiUnavailable=false, apiTimer=null, apiPollInFlight=false, logRenderTimer=0;
 const encoder=new TextEncoder(),decoder=new TextDecoder();
 function hex(bytes){return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join(' ').toUpperCase();}
 function bytes(text,format){
@@ -72,23 +84,33 @@ function summary(c,final=false){
  const pass=!missing.length&&!c.bad&&!c.duplicates&&!c.order;
  return `${final?(pass?'PASS':'FAIL'):'進行中'} | ${c.seen.size}/100 | 錯誤 ${c.bad} | 重複 ${c.duplicates} | 亂序 ${c.order} | 缺少 ${missing.length}${final&&missing.length?'：'+missing.join(','):''}`;
 }
+function renderLog(){
+ logRenderTimer=0;
+ const output=$('log');output.textContent=records.join('\n');output.scrollTop=output.scrollHeight;
+}
 function log(message){
  records.push(`${new Date().toISOString()} ${message}`);
  // ponytail: bounded in-memory log for bench tests; stream to a file for sustained acquisition.
  if(records.length>2000)records.shift();
- $('log').textContent=records.join('\n');$('log').scrollTop=$('log').scrollHeight;
+ if(!logRenderTimer)logRenderTimer=setTimeout(renderLog,50);
 }
 async function callApi(path,options={}){
- const response=await fetch(path,{cache:'no-store',...options});
- const text=await response.text();
- let data;try{data=JSON.parse(text);}catch{throw Error(`API 回覆不是 JSON（HTTP ${response.status}）`);}
- if(!response.ok||data.ok===false)throw Error(data.error||`API HTTP ${response.status}`);
- return data;
+ const controller=new AbortController(),timeoutMs=options.timeoutMs||4000,request={...options};
+ delete request.timeoutMs;
+ const timer=setTimeout(()=>controller.abort(),timeoutMs);
+ try{
+  const response=await fetch(path,{cache:'no-store',...request,signal:controller.signal});
+  const text=await response.text();
+  let data;try{data=JSON.parse(text);}catch{throw Error(`API 回覆不是 JSON（HTTP ${response.status}）`);}
+  if(!response.ok||data.ok===false)throw Error(data.error||`API HTTP ${response.status}`);
+  return data;
+ }catch(e){if(e.name==='AbortError')throw Error(`API 逾時（${timeoutMs} ms）`);throw e;}finally{clearTimeout(timer);}
 }
 async function refreshUartState(silent=false){
  try{
-  const data=await callApi('/api/state');
-  $('uartState').textContent=`腳本已連接：${data.port} ${data.baud} 8N1；BLE link=${data.connected?'connected':'未連線'}`;
+ const data=await callApi('/api/state');
+  const job=data.busy?`；執行中：${data.action}`:'';
+  $('uartState').textContent=`腳本已連接：${data.port} ${data.baud} 8N1；BLE link=${data.connected?'connected':'未連線'}${job}`;
   apiUnavailable=false;
  }catch(e){
   $('uartState').textContent=`腳本 API 未連線：${e.message}`;
@@ -96,6 +118,8 @@ async function refreshUartState(silent=false){
  }
 }
 async function pollUartEvents(){
+ if(apiPollInFlight)return;
+ apiPollInFlight=true;
  try{
   const data=await callApi(`/api/events?after=${apiEventId}`);
   for(const event of data.events||[]){apiEventId=Math.max(apiEventId,event.id);log(`SCRIPT ${event.text}`);}
@@ -103,20 +127,20 @@ async function pollUartEvents(){
  }catch(e){
   if(!apiUnavailable)log(`SCRIPT API ERROR ${e.message}`);
   apiUnavailable=true;
- }
+ }finally{apiPollInFlight=false;}
 }
 async function uartAction(action,payload={}){
  if(busy)return;
  busy=true;controls();
  try{
   await callApi('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...payload})});
-  $('uartState').textContent=`腳本已執行：${action}`;
+ $('uartState').textContent=`腳本已排程：${action}`;
   await refreshUartState(true);
  }catch(e){$('uartState').textContent=`UART 操作失敗：${e.message}`;log(`SCRIPT API ERROR ${e.message}`);}
  finally{busy=false;controls();}
 }
 function uartData(){
- return {value:$('payload').value,encoding:$('encoding').value==='text'?'Text':'Hex'};
+ return {value:$('uartPayload').value,encoding:$('uartEncoding').value==='text'?'Text':'Hex'};
 }
 function state(message){$('state').textContent=message;log(message);}
 function controls(){
@@ -242,7 +266,7 @@ function selftest(){
 $('selftest').onclick=()=>{try{state(selftest());}catch(e){state('FAIL '+e.message);}};
 if(!navigator.bluetooth||!window.isSecureContext)state('此瀏覽器無 Web Bluetooth 或不是安全來源；可執行離線檢查，實機請用電腦 Chrome localhost。');
 refreshUartState(true);pollUartEvents();apiTimer=setInterval(pollUartEvents,500);
-window.addEventListener('beforeunload',()=>{if(apiTimer)clearInterval(apiTimer);});
+window.addEventListener('beforeunload',()=>{if(apiTimer)clearInterval(apiTimer);if(logRenderTimer)clearTimeout(logRenderTimer);});
 </script>
 </html>
 
