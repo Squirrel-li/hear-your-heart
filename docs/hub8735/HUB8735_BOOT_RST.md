@@ -4,6 +4,8 @@
 
 使用另一塊開發板自動控制 HUB8735 Ultra 進入燒錄模式與 Reset。建議第一版只讓外部開發板負責 BOOT/RESET 時序，實際韌體仍由 PC 經 HUB8735 Ultra 的 DEBUG USB 上傳。
 
+目前設計定案：外部控制板使用 3.3 V GPIO；BOOT 使用 `JA1/JA2`，RESET 另飛一條訊號線至 HUB8735 Ultra 的 `CHIP_EN`／RESET 節點。
+
 ## 已確認的硬體條件
 
 - HUB8735 Ultra 的 `JA2-2`／Arduino 腳位 `14` 是 `BOOT_MODE`。
@@ -20,16 +22,16 @@
 | `JA2-2 / 14 / BOOT_MODE` | `BOOT_CTL`，只能輸出 3.3 V 或高阻態 | 控制燒錄模式 |
 | `JA2-1 / 3.3V` | 受控開關的 3.3 V 來源 | 拉高 `BOOT_MODE` |
 | `JA1-2 / GND` | 外部開發板 `GND` | 共地 |
-| `SWA1` 兩端或 `CHIP_EN` reset 節點 | PhotoMOS、繼電器或開漏 NMOS | 模擬 RESET 按鍵 |
+| `CHIP_EN`／RESET 節點 | 另飛一條 RESET 訊號線；經 PhotoMOS、開漏 NMOS 或 NPN 控制 | 模擬 RESET 按鍵 |
 
 HUB8735 Ultra 建議由自己的 USB-C 供電，外部開發板只共地並控制訊號，不要任意用外部開發板的電源替 HUB8735 Ultra 供電。
 
 ## 電氣注意事項
 
-1. 外部開發板若是 5 V GPIO，必須加入 3.3 V level shifter，不可直接接到 `BOOT_MODE`。
+1. 目前控制板固定使用 3.3 V GPIO，因此不需要 level shifter。若日後改用 5 V 開發板，BOOT 控制必須加入 3.3 V level shifter 或 3.3 V 三態緩衝器，不可直接接到 `BOOT_MODE`。
 2. `BOOT_CTL` 在外部開發板上電、重置及非燒錄狀態都應為高阻態，避免意外讓 HUB8735 Ultra 一直進入燒錄模式。
 3. `BOOT_MODE` 只在進入燒錄時暫時拉高，完成取樣後應解除連接。
-4. RESET 不建議用 push-pull GPIO 直接硬推。優先使用並聯在 `SWA1` 兩端的 PhotoMOS／繼電器；若使用 NMOS 或 NPN 開漏電路，應先用萬用表確認 RESET 的低有效節點。
+4. RESET 飛線不建議由 push-pull GPIO 直接硬推。優先使用 PhotoMOS 或開漏 NMOS/NPN；接線前應先用萬用表確認 `CHIP_EN`／RESET 的低有效節點。
 5. 控制板與 HUB8735 Ultra 的電源可能不同，避免經 GPIO 保護二極體回灌電源；必要時在控制線加入隔離或三態緩衝。
 
 ## 建議控制時序
@@ -60,7 +62,7 @@ RESET_CTL = released
 1. 先不接外部控制板，手動短接 `14` 與 `3.3V`，按 RESET，確認 HUB8735 Ultra 能進入燒錄模式。
 2. 使用 3.3 V 邏輯分析儀或萬用表確認 `BOOT_MODE` 在 RESET 釋放時為高電位。
 3. 外部控制板先只接 `GND` 與 `BOOT_MODE`，手動按 RESET，確認外部拉高有效。
-4. 再接入 RESET 模擬電路，確認控制板上電後 HUB8735 Ultra 不會被持續重置。
+4. 再接入 `CHIP_EN` RESET 飛線，確認控制板上電後 HUB8735 Ultra 不會被持續重置。
 5. 最後才接上 PC 下載流程，確認每次都能穩定枚舉 COM 並完成上傳。
 6. 若只控制 `14` 仍無法進入燒錄模式，再檢查原理圖中的 `GPIOE_5/TPA6` 是否需要額外控制；不要直接把 `TPA6` 接到未確認電壓的 GPIO。
 
@@ -72,11 +74,11 @@ RESET_CTL = released
 
 ## 製作前需要確認
 
-1. 外部開發板的型號，以及 GPIO 電壓是 3.3 V 還是 5 V。
-2. 是否只需要自動 BOOT/RESET，還是外部開發板也要自行傳送 `.bin`。
-3. 是否可以從 HUB8735 Ultra 的 `JA1`、`JA2` 排針及 RESET 按鍵焊盤拉線。
-4. HUB8735 Ultra 是否由 USB-C 獨立供電。
-5. 若 RESET 不直接並聯按鍵，需提供 RESET 按鍵焊盤照片或量測結果，以確認 `CHIP_EN` 的有效電位。
+1. 外部開發板的確切型號，供後續撰寫控制器韌體時指定 GPIO 編號。
+2. RESET 飛線的實際焊接位置，以及量測確認的 `CHIP_EN` 有效電位。
+3. HUB8735 Ultra 是否由 USB-C 獨立供電。
+
+
 
 ## 參考文件
 
