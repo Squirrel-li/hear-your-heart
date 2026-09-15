@@ -90,3 +90,4 @@ node_modules/
 # Agent-local memory and state
 /.agents/*
 !/.agents/agent.md
+*.dtmp
