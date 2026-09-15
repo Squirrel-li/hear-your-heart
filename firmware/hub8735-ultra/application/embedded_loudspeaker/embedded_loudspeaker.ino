@@ -1,54 +1,83 @@
-#include "AmebaFatFS.h"
-#include <MAX98357.h>
+#include "debug.h"
 
-#include "SensorTask.h"
-#include "ControlTask.h"
-#include "DisplayTask.h"
-#include "CommTask.h"
-#include "LogTask.h"
+#include "globalData.h"
 
+#include "BLETask.h"
+#include "analysisTask.h"
+#include "controlTask.h"
+#include "audioTask.h"
+#include "UITask.h"
 
-
-static QueueHandle_t sampleQueue = nullptr;
-
-static TaskHandle_t sensorTaskHandle = nullptr;
-static TaskHandle_t analysisTaskHandle = nullptr;
-static TaskHandle_t audioTaskHandle = nullptr;
 static TaskHandle_t BLETaskHandle = nullptr;
+static TaskHandle_t analysisTaskHandle = nullptr;
+static TaskHandle_t controlTaskHandle = nullptr;
+static TaskHandle_t audioTaskHandle = nullptr;
 static TaskHandle_t UITaskHandle = nullptr;
 
-AmebaFatFS fs;
-MAX98357 amp;
+QueueHandle_t bleRxFrameQueue = nullptr;
+QueueHandle_t ppgSensorQueue = nullptr;
+QueueHandle_t gSensorQueue = nullptr;
+QueueHandle_t audioCmdQueue = nullptr;
+QueueHandle_t uiUpdateQueue = nullptr;
+QueueHandle_t bleTxQueue = nullptr;
 
-void setup() 
+UserInfo userInfo;
+
+void setup()
 {
-    fs.begin();                  // SD 卡
-    amp.begin();                 // I2S 初始化(佔用 D11/D12/D22/D23/D24)
-    amp.setShutdownPin(10);      // 選用:SD_MODE 接 D10,不播放時硬體關斷
-    amp.setVolume(0.8);          // 軟體音量 0.0 ~ 1.0
+    // 初始化串口
+    #ifdef DEBUG_MODE
+    Serial.begin(2000000);
+    DEBUG_PRINTLN("Initializing USB type-C DEBUG serial port");
+    #else
+    Serial2.begin(115200);
+    DEBUG_PRINTLN("Initializing DEBUG serial port");
+    #endif
+    DEBUG_PRINTLN("Starting embedded loudspeaker application");
+    
+    Serial2.begin(38400);
+    DEBUG_PRINTLN("Initializing PPG sensor serial port");
 
-    // if (!amp.playWav(fs, "test001.wav")) {   // 阻塞式播放 SD 卡根目錄的檔案
-    //     Serial.println(amp.lastError());
-    // }
+    userInfo.age = 25;
+    userInfo.weight = 70.5;
+    userInfo.height = 175.0;
+    
+    // UI
+    // 初始化UI
+    // TODO: 初始化UI
 
-    if (xTaskCreate(sensorTask, "sensor", 1024, nullptr, 2, &sensorTaskHandle) != pdPASS) {
-        Serial.println("sensor task create failed");
+    // 初始化應用程式佇列
+    if (!appQueuesInit()) {
+        DEBUG_PRINTLN("Failed to initialize app queues");
+        while(1);
+    }
+
+    // 建立任務
+    if (xTaskCreate(BLETask, "BLE", 1024, nullptr, 2, &BLETaskHandle) != pdPASS) {
+        DEBUG_PRINTLN("BLE task create failed");
+        while(1);
     }
     if (xTaskCreate(analysisTask, "analysis", 1024, nullptr, 2, &analysisTaskHandle) != pdPASS) {
-        Serial.println("analysis task create failed");
+        DEBUG_PRINTLN("analysis task create failed");
+        while(1);
+    }
+    if (xTaskCreate(controlTask, "control", 1024, nullptr, 2, &controlTaskHandle) != pdPASS) {
+        DEBUG_PRINTLN("control task create failed");
+        while(1);
     }
     if (xTaskCreate(audioTask, "audio", 1024, nullptr, 2, &audioTaskHandle) != pdPASS) {
-        Serial.println("audio task create failed");
-    }
-    if (xTaskCreate(BLETask, "BLE", 1024, nullptr, 2, &BLETaskHandle) != pdPASS) {
-        Serial.println("BLE task create failed");
+        DEBUG_PRINTLN("audio task create failed");
+        while(1);
     }
     if (xTaskCreate(UITask, "UI", 1024, nullptr, 2, &UITaskHandle) != pdPASS) {
-        Serial.println("UI task create failed");
+        DEBUG_PRINTLN("UI task create failed");
+        while(1);
     }
+    DEBUG_PRINTLN("All tasks created successfully");
+
 }
 
 void loop() 
 {
-    int test_num = 0x2A;
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }

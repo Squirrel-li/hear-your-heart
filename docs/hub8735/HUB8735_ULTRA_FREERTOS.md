@@ -62,24 +62,24 @@ vTaskStartScheduler();
 
 常用 API：
 
-| 用途 | API |
-| --- | --- |
-| 建立 task | `xTaskCreate()`、`xTaskCreateStatic()` |
-| 刪除 task | `vTaskDelete()` |
-| task 延遲 | `vTaskDelay()` |
-| 固定週期執行 | `vTaskDelayUntil()` |
-| 主動讓出 CPU | `taskYIELD()` |
-| 取得 tick | `xTaskGetTickCount()` |
-| 建立 queue | `xQueueCreate()`、`xQueueCreateStatic()` |
-| 傳送/接收 queue | `xQueueSend()`、`xQueueReceive()` |
-| ISR 傳送/接收 | `xQueueSendFromISR()`、`xQueueReceiveFromISR()` |
-| 建立 mutex | `xSemaphoreCreateMutex()` |
-| 建立 binary semaphore | `xSemaphoreCreateBinary()` |
-| 取得/釋放 semaphore | `xSemaphoreTake()`、`xSemaphoreGive()` |
-| ISR 釋放 semaphore | `xSemaphoreGiveFromISR()` |
-| task notification | `xTaskNotifyGive()`、`ulTaskNotifyTake()` |
-| 建立 software timer | `xTimerCreate()`、`xTimerCreateStatic()` |
-| 取得剩餘 heap | `xPortGetFreeHeapSize()` |
+| 用途                  | API                                                 |
+| --------------------- | --------------------------------------------------- |
+| 建立 task             | `xTaskCreate()`、`xTaskCreateStatic()`          |
+| 刪除 task             | `vTaskDelete()`                                   |
+| task 延遲             | `vTaskDelay()`                                    |
+| 固定週期執行          | `vTaskDelayUntil()`                               |
+| 主動讓出 CPU          | `taskYIELD()`                                     |
+| 取得 tick             | `xTaskGetTickCount()`                             |
+| 建立 queue            | `xQueueCreate()`、`xQueueCreateStatic()`        |
+| 傳送/接收 queue       | `xQueueSend()`、`xQueueReceive()`               |
+| ISR 傳送/接收         | `xQueueSendFromISR()`、`xQueueReceiveFromISR()` |
+| 建立 mutex            | `xSemaphoreCreateMutex()`                         |
+| 建立 binary semaphore | `xSemaphoreCreateBinary()`                        |
+| 取得/釋放 semaphore   | `xSemaphoreTake()`、`xSemaphoreGive()`          |
+| ISR 釋放 semaphore    | `xSemaphoreGiveFromISR()`                         |
+| task notification     | `xTaskNotifyGive()`、`ulTaskNotifyTake()`       |
+| 建立 software timer   | `xTimerCreate()`、`xTimerCreateStatic()`        |
+| 取得剩餘 heap         | `xPortGetFreeHeapSize()`                          |
 
 ### 3.2 使用 Arduino SDK wrapper
 
@@ -92,16 +92,16 @@ vTaskStartScheduler();
 
 wrapper 適合只需要 thread、software timer、semaphore 或 signal 的簡單程式：
 
-| 用途 | SDK wrapper |
-| --- | --- |
-| 建立 thread | `os_thread_create_arduino()` |
-| 結束 thread | `os_thread_terminate_arduino()` |
-| 讓出 CPU | `os_thread_yield_arduino()` |
-| 設定/取得 priority | `os_thread_set_priority_arduino()` / `os_thread_get_priority_arduino()` |
-| 建立/啟動/停止 timer | `os_timer_create_arduino()` / `os_timer_start_arduino()` / `os_timer_stop_arduino()` |
-| 刪除 timer | `os_timer_delete_arduino()` |
+| 用途                     | SDK wrapper                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 建立 thread              | `os_thread_create_arduino()`                                                                           |
+| 結束 thread              | `os_thread_terminate_arduino()`                                                                        |
+| 讓出 CPU                 | `os_thread_yield_arduino()`                                                                            |
+| 設定/取得 priority       | `os_thread_set_priority_arduino()` / `os_thread_get_priority_arduino()`                              |
+| 建立/啟動/停止 timer     | `os_timer_create_arduino()` / `os_timer_start_arduino()` / `os_timer_stop_arduino()`               |
+| 刪除 timer               | `os_timer_delete_arduino()`                                                                            |
 | 建立/取得/釋放 semaphore | `os_semaphore_create_arduino()` / `os_semaphore_wait_arduino()` / `os_semaphore_release_arduino()` |
-| 取得剩餘 heap | `os_get_free_heap_size_arduino()` |
+| 取得剩餘 heap            | `os_get_free_heap_size_arduino()`                                                                      |
 
 wrapper 的 priority 使用 `OS_PRIORITY_*`：
 
@@ -490,32 +490,32 @@ external/HUB-8735/amebapro2_arduino/Arduino_package/
 
 主要設定如下：
 
-| 設定 | 目前值 | 作用與建議 |
-| --- | --- | --- |
-| `configUSE_PREEMPTION` | `1` | 啟用搶佔式排程。一般應保持啟用。 |
-| `configUSE_TIME_SLICING` | `1` | 同 priority task 可分時執行。 |
-| `configMAX_PRIORITIES` | `11` | 直接 FreeRTOS priority 為 `0` 到 `10`。 |
-| `configMINIMAL_STACK_SIZE` | `512` | Idle task 的基準 stack，不是應用 task 建議值。 |
-| `configTOTAL_HEAP_SIZE` | `120 * 1024` | FreeRTOS heap 設定；task、queue、timer 的 dynamic allocation 會消耗它。 |
-| `configTICK_RATE_HZ` | `1000` | 1 秒 1000 ticks；程式使用 `pdMS_TO_TICKS()`。 |
-| `configUSE_TICKLESS_IDLE` | `0` | 目前未啟用 tickless idle；低功耗不能只靠此設定自動完成。 |
-| `configUSE_MUTEXES` | `1` | 啟用 mutex。 |
-| `configUSE_COUNTING_SEMAPHORES` | `1` | 啟用 counting semaphore。 |
-| `configUSE_RECURSIVE_MUTEXES` | `1` | 啟用 recursive mutex。 |
-| `configUSE_QUEUE_SETS` | `1` | 啟用 queue set。沒有使用時不必特別依賴它。 |
-| `configUSE_TASK_NOTIFICATIONS` | `1` | 啟用 task notification，單一事件同步優先使用它。 |
-| `configUSE_NEWLIB_REENTRANT` | `1` | 每個 task 保留 Newlib reentrancy 狀態，會增加 task 記憶體；除非確認 SDK 不需要，否則不要關閉。 |
-| `configUSE_TRACE_FACILITY` | `1` | 啟用 task trace 與統計相關功能。 |
-| `configUSE_STATS_FORMATTING_FUNCTIONS` | `1` | 可使用 `vTaskList()` 等統計格式化 API。 |
-| `configUSE_TIMERS` | `1` | 啟用 software timer。 |
-| `configTIMER_TASK_PRIORITY` | `10` | Timer service task priority。callback 必須保持短小。 |
-| `configTIMER_QUEUE_LENGTH` | `44` | Timer command queue 長度。 |
-| `configTIMER_TASK_STACK_DEPTH` | `1024` | Timer service task stack depth。 |
-| `configCHECK_FOR_STACK_OVERFLOW` | `2` | 啟用較完整的 stack overflow 檢查。 |
-| `configSUPPORT_STATIC_ALLOCATION` | `1` | 可使用 static task/queue/semaphore/timer API。 |
-| `configUSE_MALLOC_FAILED_HOOK` | `0` | 目前沒有啟用 malloc failure hook。需要時要連同 callback 一起實作。 |
-| `INCLUDE_uxTaskGetStackHighWaterMark` | `0` | 目前不能直接使用 watermark API；除錯時可改為 `1`。 |
-| `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` | `4` | 會呼叫 `FromISR` API 的 ISR，優先權不可高於此限制。 |
+| 設定                                             | 目前值         | 作用與建議                                                                                     |
+| ------------------------------------------------ | -------------- | ---------------------------------------------------------------------------------------------- |
+| `configUSE_PREEMPTION`                         | `1`          | 啟用搶佔式排程。一般應保持啟用。                                                               |
+| `configUSE_TIME_SLICING`                       | `1`          | 同 priority task 可分時執行。                                                                  |
+| `configMAX_PRIORITIES`                         | `11`         | 直接 FreeRTOS priority 為`0` 到 `10`。                                                     |
+| `configMINIMAL_STACK_SIZE`                     | `512`        | Idle task 的基準 stack，不是應用 task 建議值。                                                 |
+| `configTOTAL_HEAP_SIZE`                        | `120 * 1024` | FreeRTOS heap 設定；task、queue、timer 的 dynamic allocation 會消耗它。                        |
+| `configTICK_RATE_HZ`                           | `1000`       | 1 秒 1000 ticks；程式使用`pdMS_TO_TICKS()`。                                                 |
+| `configUSE_TICKLESS_IDLE`                      | `0`          | 目前未啟用 tickless idle；低功耗不能只靠此設定自動完成。                                       |
+| `configUSE_MUTEXES`                            | `1`          | 啟用 mutex。                                                                                   |
+| `configUSE_COUNTING_SEMAPHORES`                | `1`          | 啟用 counting semaphore。                                                                      |
+| `configUSE_RECURSIVE_MUTEXES`                  | `1`          | 啟用 recursive mutex。                                                                         |
+| `configUSE_QUEUE_SETS`                         | `1`          | 啟用 queue set。沒有使用時不必特別依賴它。                                                     |
+| `configUSE_TASK_NOTIFICATIONS`                 | `1`          | 啟用 task notification，單一事件同步優先使用它。                                               |
+| `configUSE_NEWLIB_REENTRANT`                   | `1`          | 每個 task 保留 Newlib reentrancy 狀態，會增加 task 記憶體；除非確認 SDK 不需要，否則不要關閉。 |
+| `configUSE_TRACE_FACILITY`                     | `1`          | 啟用 task trace 與統計相關功能。                                                               |
+| `configUSE_STATS_FORMATTING_FUNCTIONS`         | `1`          | 可使用`vTaskList()` 等統計格式化 API。                                                       |
+| `configUSE_TIMERS`                             | `1`          | 啟用 software timer。                                                                          |
+| `configTIMER_TASK_PRIORITY`                    | `10`         | Timer service task priority。callback 必須保持短小。                                           |
+| `configTIMER_QUEUE_LENGTH`                     | `44`         | Timer command queue 長度。                                                                     |
+| `configTIMER_TASK_STACK_DEPTH`                 | `1024`       | Timer service task stack depth。                                                               |
+| `configCHECK_FOR_STACK_OVERFLOW`               | `2`          | 啟用較完整的 stack overflow 檢查。                                                             |
+| `configSUPPORT_STATIC_ALLOCATION`              | `1`          | 可使用 static task/queue/semaphore/timer API。                                                 |
+| `configUSE_MALLOC_FAILED_HOOK`                 | `0`          | 目前沒有啟用 malloc failure hook。需要時要連同 callback 一起實作。                             |
+| `INCLUDE_uxTaskGetStackHighWaterMark`          | `0`          | 目前不能直接使用 watermark API；除錯時可改為`1`。                                            |
+| `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` | `4`          | 會呼叫`FromISR` API 的 ISR，優先權不可高於此限制。                                           |
 
 ### 10.1 不要直接修改外部 Arduino 套件作為長期方案
 
@@ -608,13 +608,13 @@ ARM NVIC 的數值越小代表優先權越高。因此：
 
 本專案是感測器、音訊與手機 App 的整合系統，建議採取少量、職責清楚的 task：
 
-| Task | 工作 | 建議同步方式 |
-| --- | --- | --- |
-| Sensor task | 定期讀取心率、呼吸、活動資料 | `vTaskDelayUntil()`，送 `sensorQueue` |
-| Analysis task | 分析狀態、決定音樂/節奏 | 阻塞等待 `sensorQueue` |
-| Audio task | 播放或切換音樂 | 阻塞等待 `audioQueue`；保護 I2S/SPI 資源 |
-| BLE/communication task | 傳送資料或接收手機命令 | queue 或 task notification |
-| UI/OLED task | 更新顯示 | 低頻 timer 或 queue |
+| Task                   | 工作                         | 建議同步方式                              |
+| ---------------------- | ---------------------------- | ----------------------------------------- |
+| Sensor task            | 定期讀取心率、呼吸、活動資料 | `vTaskDelayUntil()`，送 `sensorQueue` |
+| Analysis task          | 分析狀態、決定音樂/節奏      | 阻塞等待`sensorQueue`                   |
+| Audio task             | 播放或切換音樂               | 阻塞等待`audioQueue`；保護 I2S/SPI 資源 |
+| BLE/communication task | 傳送資料或接收手機命令       | queue 或 task notification                |
+| UI/OLED task           | 更新顯示                     | 低頻 timer 或 queue                       |
 
 HUB 8735 Ultra 的 Wi-Fi、BLE、影像與底層 driver 也會使用 SDK 內部 task。應用程式不要大量建立高 priority task，避免影響系統 driver；除非已量測並確認有必要，應用 task 優先從低到中等 priority 開始。
 
