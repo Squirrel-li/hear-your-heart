@@ -31,7 +31,12 @@ void notificationCB(BLERemoteCharacteristic* chr, uint8_t* data, uint16_t len)
         return; // Skip processing for this notification
     }
     memcpy(msgElement.data, data, len);
-    xQueueSend(bleRxFrameQueue, &msgElement, 0);
+    if (xQueueSend(bleRxFrameQueue, &msgElement, 0) == pdPASS) {
+        DEBUG_PRINT("BLE callback -> BLETask: queued frame, len=");
+        DEBUG_PRINTLN(msgElement.length);
+    } else {
+        DEBUG_PRINTLN("BLE callback -> BLETask: frame queue full");
+    }
     DEBUG_PRINT("\n\nNotification received for chr UUID: ");
     DEBUG_PRINTLN(chr->getUUID().str());
     DEBUG_PRINT("Received data: ");
@@ -105,14 +110,18 @@ void BLETask(void* parameter) {
                 (static_cast<uint32_t>(msgElement.data[6]) << 16) |
                 (static_cast<uint32_t>(msgElement.data[7]) << 8) |
                 static_cast<uint32_t>(msgElement.data[8]);
-            DEBUG_PRINT("BLETask: Received BLE frame with sensor ID: ");
-            DEBUG_PRINTLN(sensorId);
-            DEBUG_PRINT("Receive timestamp: ");
-            DEBUG_PRINTLN(msgElement.receive_timestamp);
-            DEBUG_PRINT("Device timestamp: ");
-            DEBUG_PRINTLN(device_timestamp);
-            DEBUG_PRINT("Sequence: ");
+            DEBUG_PRINT("BLETask <- BLE callback: sensorId=");
+            DEBUG_PRINT(sensorId);
+            DEBUG_PRINT(" sequence=");
             DEBUG_PRINTLN(sequence);
+            // DEBUG_PRINT("BLETask: Received BLE frame with sensor ID: ");
+            // DEBUG_PRINTLN(sensorId);
+            // DEBUG_PRINT("Receive timestamp: ");
+            // DEBUG_PRINTLN(msgElement.receive_timestamp);
+            // DEBUG_PRINT("Device timestamp: ");
+            // DEBUG_PRINTLN(device_timestamp);
+            // DEBUG_PRINT("Sequence: ");
+            // DEBUG_PRINTLN(sequence);
             
             if (sensorId == 0x01) { // PPG sensor
                 if (msgElement.length < 20) {
@@ -132,26 +141,35 @@ void BLETask(void* parameter) {
                 ppgElement.systoleDuration = msgElement.data[15];
                 ppgElement.ppg1 = (msgElement.data[16] << 8) | msgElement.data[17];
                 ppgElement.ppg2 = (msgElement.data[18] << 8) | msgElement.data[19];
-                xQueueSend(ppgSensorQueue, &ppgElement, 0);
-                DEBUG_PRINTLN("PPG sensor data received");
-                DEBUG_PRINT("Status: ");
-                DEBUG_PRINTLN(ppgElement.status);
-                DEBUG_PRINT("SpO2: ");
-                DEBUG_PRINTLN(ppgElement.SpO2);
-                DEBUG_PRINT("Heart Rate: ");
-                DEBUG_PRINTLN(ppgElement.heartRateBpm);
-                DEBUG_PRINT("BPI: ");
-                DEBUG_PRINTLN(ppgElement.bpi);
-                DEBUG_PRINT("HRV: ");
-                DEBUG_PRINTLN(ppgElement.hrv);
-                DEBUG_PRINT("Pulse Amplitude: ");
-                DEBUG_PRINTLN(ppgElement.pulseAmplitude);
-                DEBUG_PRINT("Systole Duration: ");
-                DEBUG_PRINTLN(ppgElement.systoleDuration);
-                DEBUG_PRINT("PPG1: ");
-                DEBUG_PRINTLN(ppgElement.ppg1);
-                DEBUG_PRINT("PPG2: ");
-                DEBUG_PRINTLN(ppgElement.ppg2);
+                if (xQueueSend(ppgSensorQueue, &ppgElement, 0) == pdPASS) {
+                    DEBUG_PRINT("BLETask -> analysisTask: PPG HR=");
+                    DEBUG_PRINT(ppgElement.heartRateBpm);
+                    DEBUG_PRINT(" status=");
+                    DEBUG_PRINT(ppgElement.status);
+                    DEBUG_PRINT(" sequence=");
+                    DEBUG_PRINTLN(ppgElement.sequence);
+                } else {
+                    DEBUG_PRINTLN("BLETask -> analysisTask: PPG queue full");
+                }
+                // DEBUG_PRINTLN("PPG sensor data received");
+                // DEBUG_PRINT("Status: ");
+                // DEBUG_PRINTLN(ppgElement.status);
+                // DEBUG_PRINT("SpO2: ");
+                // DEBUG_PRINTLN(ppgElement.SpO2);
+                // DEBUG_PRINT("Heart Rate: ");
+                // DEBUG_PRINTLN(ppgElement.heartRateBpm);
+                // DEBUG_PRINT("BPI: ");
+                // DEBUG_PRINTLN(ppgElement.bpi);
+                // DEBUG_PRINT("HRV: ");
+                // DEBUG_PRINTLN(ppgElement.hrv);
+                // DEBUG_PRINT("Pulse Amplitude: ");
+                // DEBUG_PRINTLN(ppgElement.pulseAmplitude);
+                // DEBUG_PRINT("Systole Duration: ");
+                // DEBUG_PRINTLN(ppgElement.systoleDuration);
+                // DEBUG_PRINT("PPG1: ");
+                // DEBUG_PRINTLN(ppgElement.ppg1);
+                // DEBUG_PRINT("PPG2: ");
+                // DEBUG_PRINTLN(ppgElement.ppg2);
             } else if (sensorId == 0x02) { // G sensor
                 if (msgElement.length < 21) {
                     DEBUG_PRINTLN("Error: G sensor data length is less than expected");
@@ -167,7 +185,12 @@ void BLETask(void* parameter) {
                 gSensorElement.gyro_x = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[15]) << 8) | msgElement.data[16]);
                 gSensorElement.gyro_y = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[17]) << 8) | msgElement.data[18]);
                 gSensorElement.gyro_z = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[19]) << 8) | msgElement.data[20]);
-                xQueueSend(gSensorQueue, &gSensorElement, 0);
+                if (xQueueSend(gSensorQueue, &gSensorElement, 0) == pdPASS) {
+                    DEBUG_PRINT("BLETask -> analysisTask: G sensor sequence=");
+                    DEBUG_PRINTLN(gSensorElement.sequence);
+                } else {
+                    DEBUG_PRINTLN("BLETask -> analysisTask: G sensor queue full");
+                }
                 DEBUG_PRINTLN("G sensor data received");
                 DEBUG_PRINT("Acc X: ");
                 DEBUG_PRINTLN(gSensorElement.acc_x);

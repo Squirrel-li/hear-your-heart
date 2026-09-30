@@ -14,7 +14,9 @@ constexpr uint16_t LOG_MESSAGE_MAX = 96;
 extern QueueHandle_t bleRxFrameQueue;	// BLE notification callback queue
 extern QueueHandle_t ppgSensorQueue;	// PPG sensor data queue
 extern QueueHandle_t gSensorQueue;		// G-sensor data queue
+extern QueueHandle_t targetBpmResultQueue;	// Latest analysis result for controlTask
 extern QueueHandle_t audioCmdQueue;		// Audio command queue
+extern QueueHandle_t audioPlaybackEventQueue;	// Playback events for controlTask
 extern QueueHandle_t uiUpdateQueue;		// UI update queue
 extern QueueHandle_t bleTxQueue;		// BLE transmission queue
 
@@ -32,7 +34,7 @@ struct UserInfo {
     }
 };
 
-extern UserInfo userInfo;		// BLE transmission queue
+extern UserInfo userInfo;
 
 // Big-endian format
 
@@ -85,6 +87,21 @@ struct GSensorElement {
     int16_t gyro_z;
 };
 
+struct TargetBpmResult {
+    uint16_t targetBpm;
+    uint8_t zone;
+};
+
+enum class AudioPlaybackEventType : uint8_t {
+    Finished,
+    Failed
+};
+
+struct AudioPlaybackEvent {
+    AudioPlaybackEventType type;
+    int8_t songIndex;
+};
+
 enum class AudioCommandType : uint8_t {
     Play,
     Stop,
@@ -96,6 +113,8 @@ enum class AudioCommandType : uint8_t {
 struct AudioCmdElement {
     AudioCommandType command;
     uint8_t volumePercent;
+    uint8_t isAutomatic;
+    int8_t songIndex;
     char filename[AUDIO_FILENAME_MAX];
 };
 
