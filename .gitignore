@@ -88,6 +88,7 @@ node_modules/
 !.env.example
 
 # Agent-local memory and state
+.codex-remote-attachments/
 /.agents/*
 !/.agents/agent.md
 *.dtmp
