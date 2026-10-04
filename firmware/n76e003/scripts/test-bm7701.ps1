@@ -78,3 +78,43 @@ Assert ($script:WebAction.Phase -eq 'cooldown') 'web timeout cooldown'
 $script:WebAction=$null;$script:TimeoutMs=100
 Write-Host 'PASS: Web timeout enters cooldown before accepting another action.'
 
+# Shared job model: counter frames, 16-bit sequence and shell parsing.
+$job=New-BmJob counter '' Hex 300 10
+$job.Index=258
+Assert ((Format-BmHex (Get-BmJobData $job)) -eq '42 4D 02 01 00 01 02 03 04 05') 'counter 16-bit little-endian sequence'
+Reject { New-BmJob counter '' Hex 0 100 };Reject { New-BmJob counter '' Hex 10 5 };Reject { New-BmJob send 'AA' Base64 }
+Reject { ConvertFrom-BmWebAction ([pscustomobject]@{action='counter';count='ten'}) }
+Assert ((ConvertFrom-BmShellLine '  ') -eq $null) 'shell empty line'
+Assert ((ConvertFrom-BmShellLine 'QUIT') -eq 'quit') 'shell quit'
+Assert ((ConvertFrom-BmShellLine 'text Hi').Data.Length -eq 2) 'shell text'
+Assert ((ConvertFrom-BmShellLine 'counter 5').Count -eq 5) 'shell counter count'
+Reject { ConvertFrom-BmShellLine 'pwer 3' };Reject { ConvertFrom-BmShellLine 'counter x' }
+Write-Host 'PASS: shared job model, counter sequence and shell parsing.'
+# Web counter advances step by step and reports progress.
+$script:WebAction=$null;$script:WebLastResult=$null;$script:TimeoutMs=500;$script:Port='COM11';$script:Baud=115200
+Start-BmWebAction (ConvertFrom-BmWebAction ([pscustomobject]@{action='counter';count=2;intervalMs=10}))
+$ack=[pscustomobject]@{Type=0xFFF1;Status=0x20}
+Process-BmWebAction @();Assert ($script:WebAction.Phase -eq 'wait') 'counter first send'
+Process-BmWebAction @($ack);Assert ($script:WebAction.Phase -eq 'delay' -and (Get-BmWebState).done -eq 1 -and (Get-BmWebState).total -eq 2) 'counter progress'
+Start-Sleep -Milliseconds 20
+Process-BmWebAction @();Assert ($script:WebAction.Phase -eq 'wait') 'counter second send after interval'
+Process-BmWebAction @($ack);Assert ($null -eq $script:WebAction -and $script:WebLastResult.ok) 'counter completes'
+Start-BmWebAction (ConvertFrom-BmWebAction ([pscustomobject]@{action='version'}))
+Process-BmWebAction @();Process-BmWebAction @([pscustomobject]@{Type=0x20;Status=0x03})
+Assert ($script:WebAction.Phase -eq 'cooldown' -and -not $script:WebLastResult.ok) 'device error reported and cooled down'
+$script:WebAction=$null
+Write-Host 'PASS: Web counter progress, completion and device-error result.'
+# Event slicing and origin guard.
+$script:WebLog=[Collections.Generic.List[object]]::new()
+for ($i=11;$i -le 20;$i++) { $script:WebLog.Add([pscustomobject]@{id=$i;text="e$i"}) }
+Assert ((Get-BmWebEvents 0).Count -eq 10) 'events from start'
+Assert ((Get-BmWebEvents 15)[0].id -eq 16 -and (Get-BmWebEvents 15).Count -eq 5) 'events after id'
+Assert ((Get-BmWebEvents 20).Count -eq 0) 'no new events'
+Assert ((Get-BmWebEvents 0 3).Count -eq 3) 'events page limit'
+$script:HttpPort=8771
+Assert (Test-BmWebOrigin '' '') 'no origin allowed'
+Assert (Test-BmWebOrigin 'http://127.0.0.1:8771' 'same-origin') 'same origin allowed'
+Assert (Test-BmWebOrigin 'http://localhost:8771' '') 'localhost allowed'
+Assert (-not (Test-BmWebOrigin 'https://evil.example' '')) 'foreign origin rejected'
+Assert (-not (Test-BmWebOrigin '' 'cross-site')) 'cross-site fetch rejected'
+Write-Host 'PASS: event paging and cross-origin guard.'

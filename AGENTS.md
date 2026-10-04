@@ -24,7 +24,7 @@
 ## 已確認的架構規則
 
 - 專案範圍：產品手機 App 暫不納入；`apps/remote_sensor_simulator` 是感測器測試工具，可繼續維護，不代表恢復產品手機 App 開發。
-- 感測端：BM7701 為正式目標；BW16 保留作測試、驗證用途，不列為正式支援目標。
+- 感測端：BM7701 為正式目標。
 - 分析範圍：音樂檔案的 BPM、NPU 分析只在有新檔案或既有檔案被替換時執行，不在播放期間執行；播放中仍持續處理心率與更新目標 BPM，供自動選歌使用。
 - 新檔處理：播放中發現的新檔延後分析，分析成功後才加入自動選歌；分析失敗不影響其他歌曲。既有歌曲被替換時需重新分析，不沿用舊檔的分析結果。NPU 分析新音檔後記錄其曲風，供播放選曲使用。
 - 控制權：手動播放、暫停或停止優先於自動選歌；使用者明確恢復自動模式後，才重新由感測資料驅動播放，感測更新不得自行解除手動控制。
@@ -39,7 +39,7 @@
 - `firmware/hub8735-ultra/application/embedded_loudspeaker`：目前由 BLE 接收感測資料、`analysisTask` 產生目標 BPM 並送給 `controlTask`；`controlTask` 負責選歌與控制，`audioTask` 負責播放並回報播畢或失敗。流程見 `docs/hub8735/HRMAX_MUSIC_FLOW.md`。
 - `firmware/hub8735-ultra/examples/audio/analyze_mp3_bpm`：獨立的曲目 BPM 分析範例，尚未整合進主程式的曲目匯入流程；不能視為已完成新檔案偵測或 NPU 分析。
 - `apps/phone` 與 `apps/remote_sensor_simulator` 均存在；用途與維護範圍依上述已確認規則，根目錄 README 的整體願景不等於目前階段的需求。
-- `docs/remote_sensor/BW16_SENSOR_PLAN.md` 與 `docs/remote_sensor/BM7701-00-1_SENSOR_PLAN.md` 是不同感測端方案的規劃；正式目標以已確認的 BM7701 為準。
+- `docs/remote_sensor/BM7701-00-1_SENSOR_PLAN.md` 是感測端規劃入口；修改前仍須對照目前程式與硬體狀態。
 
 ## 安全與可靠性
 

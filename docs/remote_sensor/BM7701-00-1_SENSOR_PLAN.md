@@ -4,7 +4,7 @@
 
 本文件規劃使用 BM7701-00-1 作為 remote sensor 的 BLE 無線傳輸模組，將 PPG 與 G sensor 資料傳送給 HUB 8735 Ultra。
 
-BM7701-00-1 是由外部 MCU 透過 UART 控制的 BLE transparent-transmission module。它不是像 BW16 一樣直接在 Arduino 上執行完整 BLE application；remote MCU 需要透過 UART 將感測資料交給 BM7701。
+BM7701-00-1 是由外部 MCU 透過 UART 控制的 BLE transparent-transmission module；remote MCU 透過 UART 將感測資料交給 BM7701。
 
 ## 建議架構
 

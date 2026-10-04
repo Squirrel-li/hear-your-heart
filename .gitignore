@@ -92,3 +92,23 @@ node_modules/
 /.agents/*
 !/.agents/agent.md
 *.dtmp
+
+# Archive packages
+*.zip
+
+# Keil uVision generated build output
+Output/
+LST/
+Listings/
+Objects/
+*.obj
+*.m51
+*.lst
+*.lnp
+*.build_log.htm
+
+# Keil per-user project settings
+*.uvgui.*
+*.uvguix.*
+*.uvopt
+*.uvoptx

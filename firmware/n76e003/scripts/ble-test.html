@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BM7701 BLE 測試</title>
+<style>
+:root{
+ --bg:#f1f5f6;--card:#fff;--card-alt:#fafcfc;--line:#ccd8dc;--ink:#182b35;--muted:#52646c;
+ --accent:#076873;--accent-ink:#fff;--soft:#eaf3f4;--soft-ink:#12383d;--code:#eff4f5;--focus:#d67a00;
+ --ok:#1b6e35;--bad:#a52a1f;--warn:#8a5a00;
+ font-family:system-ui,sans-serif;color:var(--ink);background:var(--bg);color-scheme:light
+}
+*{box-sizing:border-box}
+body{max-width:1440px;margin:auto;padding:24px;background:var(--bg)}
+h1{margin:0 0 4px}h2{font-size:1.15rem;margin:0 0 8px}h3{font-size:1rem;margin:12px 0 4px}
+p{line-height:1.6}small{line-height:1.5}
+section,article{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0}
+article{background:var(--card-alt)}
+label{display:block;margin:10px 0}
+input,textarea,select,button{font:inherit;border:1px solid #81969f;border-radius:6px;padding:10px}
+input,textarea{width:100%;background:#fff}textarea{min-height:70px;font-family:ui-monospace,monospace}
+button{background:var(--soft);color:var(--soft-ink);cursor:pointer;min-height:44px;margin:4px 4px 4px 0}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.inline{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
+.inline button{margin:10px 0}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.muted{color:var(--muted)}
+.uuid{font-family:ui-monospace,monospace;overflow-wrap:anywhere}
+output,pre{display:block;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:12px;border-radius:6px;margin:8px 0}
+output.ok{color:var(--ok);font-weight:600}output.bad{color:var(--bad);font-weight:600}output.warn{color:var(--warn)}
+#log{max-height:360px;overflow:auto;font-size:13px}
+.badge{font-weight:600;color:#075861}
+.workspace{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:16px;align-items:start}
+.panel{min-width:0}.panel>section:first-child{margin-top:16px}
+.controller-panel{position:sticky;top:12px}
+@media(max-width:900px){body{padding:12px}.workspace{grid-template-columns:1fr}.controller-panel{position:static}}
+@media(max-width:480px){.pair,.inline{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+ <h1>BM7701 控制與 BLE 測試</h1>
+ <p class="muted">本頁由 <code>bm7701.ps1 -Command Web</code> 提供：左側透過腳本控制 UART，右側使用這台電腦的 Bluetooth 測試 BLE 服務。</p>
+</header>
+<main class="workspace">
+<div class="panel controller-panel">
+ <section aria-labelledby="hUart">
+  <h2 id="hUart">1 · BM7701 UART 控制</h2>
+  <output id="uartState" role="status">正在連接 bm7701.ps1 Web API…</output>
+  <div class="row">
+   <button class="uart" data-action="version">讀取版本</button>
+   <button class="uart" data-action="status">讀取狀態</button>
+   <button class="uart" data-action="advertise" data-value="on">開始廣播</button>
+   <button class="uart" data-action="advertise" data-value="off">停止廣播</button>
+  </div>
+  <div class="inline"><label>Bluetooth 名稱<input id="uartName" value="BM7701-ITAP" autocomplete="off"></label><button class="uart" id="uartSetName">設定名稱</button></div>
+  <div class="inline"><label>功率代碼（0–15）<input id="uartPower" type="number" min="0" max="15" value="15"></label><button class="uart" id="uartSetPower">設定功率</button></div>
+  <p class="muted">網頁不直接開啟 COM；若 API 未連線，請先在 PowerShell 執行 Web 模式。</p>
+ </section>
+ <section aria-labelledby="hSend">
+  <h2 id="hSend">2 · UART → BLE 通知（FFF1）</h2>
+  <label>格式 <select id="uartEncoding"><option value="hex">HEX</option><option value="text">UTF-8 文字</option></select></label>
+  <label>資料<textarea id="uartPayload" spellcheck="false">00 01 02 03 04 05 06 07 08 09</textarea></label>
+  <div class="row"><button class="uart" id="uartSend">發送</button><button class="uart primary" id="uartSendCheck">發送並比對通知</button></div>
+  <div class="pair">
+   <label>Counter 筆數<input id="uartCount" type="number" min="1" max="65536" value="100"></label>
+   <label>間隔（ms）<input id="uartInterval" type="number" min="10" max="60000" value="100"></label>
+  </div>
+  <div class="row"><button class="uart" id="uartCounter">發送 counter</button><button class="uart primary" id="uartCounterCheck">發送並驗證 counter</button></div>
+  <p class="muted">「比對／驗證」需先在右側連線並開啟 FFF1 通知。UART ACK 只代表模組收到命令，送達與否以 BLE 通知為準。</p>
+ </section>
+</div>
+<div class="panel">
+ <section aria-labelledby="hBle">
+  <h2 id="hBle">3 · 電腦 BLE 連線</h2>
+  <label>額外 Service UUID（逗號或空白分隔；FFF0 已包含）<input id="services" placeholder="例如 1800, 180A, 180F 或完整 128-bit UUID" autocomplete="off"></label>
+  <div class="row"><button id="connect" class="primary">選擇 BM7701 並連線</button><button id="disconnect" disabled>斷線</button><button id="readall" disabled>讀取所有可讀值</button></div>
+  <output id="state" role="status">尚未連線</output>
+  <p class="muted">只列出本次授權且 Chrome 允許存取的服務，並非完整 GATT 清單；新增 UUID 後需重新選擇裝置。重新連線後請重新訂閱。</p>
+ </section>
+ <section aria-labelledby="hCheck">
+  <h2 id="hCheck">4 · 資料與驗證</h2>
+  <label>格式 <select id="encoding"><option value="hex">HEX</option><option value="text">UTF-8 文字</option></select></label>
+  <label>BLE 寫入資料／通知預期值<textarea id="payload" spellcheck="false">00 01 02 03 04 05 06 07 08 09</textarea></label>
+  <div class="row"><button id="fixed">填入固定 10 bytes</button><button id="compare">比對下一筆 FFF1 通知</button><button id="counter">開始驗證 counter</button><button id="finish">結束 counter 並判定</button></div>
+  <output id="check" role="status">尚未開始比對。先在下方 FFF1 開啟通知，再從 UART 送出資料。</output>
+  <p class="muted">固定資料逐 byte 比對。Counter 格式：42 4D + 16-bit LE 序號（0 起，筆數取左側設定）+ 00 01 02 03 04 05；收齊即自動判定，完整、無重複、無亂序才通過。其他通知不計入。</p>
+ </section>
+ <section aria-labelledby="hChars"><h2 id="hChars">5 · Characteristics</h2><div id="characteristics">連線後顯示 UUID、屬性與可用操作。</div></section>
+ <section aria-labelledby="hLog">
+  <h2 id="hLog">6 · 事件日誌</h2>
+  <div class="row"><button id="export">匯出日誌</button><button id="clearLog">清除畫面日誌</button><button id="selftest">離線自我檢查</button></div>
+  <small class="muted">最多保留最近 2,000 筆；長測試請定期匯出。腳本 UART 事件以 SCRIPT 開頭。</small>
+  <pre id="log" aria-label="事件日誌"></pre>
+ </section>
+</div>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const full=n=>`0000${n}-0000-1000-8000-00805f9b34fb`;
+const FFF0=full('fff0'),FFF1=full('fff1');
+const FIXED='00 01 02 03 04 05 06 07 08 09';
+const LOG_LIMIT=2000,POLL_MS=500,MAX_PAYLOAD=127;
+const encoder=new TextEncoder(),decoder=new TextDecoder();
+
+/* ---------- codec ---------- */
+const hex=b=>Array.from(b,v=>v.toString(16).padStart(2,'0')).join(' ').toUpperCase();
+const utf8=b=>decoder.decode(b);
+const equal=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+function bytes(text,format){
+ if(format==='text')return encoder.encode(text);
+ const h=text.replace(/\s/g,'');
+ if(!/^(?:[a-f\d]{2})*$/i.test(h))throw Error('HEX 必須是完整 byte，例如 00 01 FF。');
+ return Uint8Array.from(h.match(/../g)||[],v=>parseInt(v,16));
+}
+function uuid(s){
+ s=s.trim().toLowerCase().replace(/^0x/,'');
+ if(/^[a-f\d]{4}$/.test(s))return full(s);
+ if(/^[a-f\d]{8}$/.test(s))return `${s}-0000-1000-8000-00805f9b34fb`;
+ if(/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/.test(s))return s;
+ throw Error(`無效 Service UUID：${s}`);
+}
+function intIn(id,min,max,label){
+ const n=Number($(id).value);
+ if(!Number.isInteger(n)||n<min||n>max)throw Error(`${label}需為 ${min}–${max} 的整數。`);
+ return n;
+}
+
+/* ---------- counter verifier ---------- */
+const COUNTER_TAIL=[0,1,2,3,4,5];
+const newCounter=(total=100)=>({total,seen:new Set(),bad:0,duplicates:0,order:0,next:0});
+function track(c,b){
+ if(b.length!==10||b[0]!==0x42||b[1]!==0x4d||COUNTER_TAIL.some((v,i)=>b[4+i]!==v)){c.bad++;return;}
+ const n=b[2]|b[3]<<8;
+ if(n>=c.total){c.bad++;return;}
+ if(c.seen.has(n))c.duplicates++;
+ if(n!==c.next)c.order++;
+ c.next=n+1;c.seen.add(n);
+}
+const counterComplete=c=>c.seen.size===c.total;
+function summary(c,final=false){
+ const missing=[];for(let i=0;i<c.total;i++)if(!c.seen.has(i))missing.push(i);
+ const pass=!missing.length&&!c.bad&&!c.duplicates&&!c.order;
+ const list=final&&missing.length?'：'+missing.slice(0,50).join(',')+(missing.length>50?'…':''):'';
+ return `${final?(pass?'PASS':'FAIL'):'進行中'} | ${c.seen.size}/${c.total} | 錯誤 ${c.bad} | 重複 ${c.duplicates} | 亂序 ${c.order} | 缺少 ${missing.length}${list}`;
+}
+
+/* ---------- log ---------- */
+const records=[];let logTimer=0;
+function renderLog(){logTimer=0;const out=$('log');out.textContent=records.join('\n');out.scrollTop=out.scrollHeight;}
+function log(message){
+ records.push(`${new Date().toISOString()} ${message}`);
+ if(records.length>LOG_LIMIT)records.splice(0,records.length-LOG_LIMIT);
+ if(!logTimer)logTimer=setTimeout(renderLog,50);
+}
+function show(id,message,tone='',record=true){
+ const o=$(id);o.textContent=message;o.className=tone;
+ if(record)log(message);
+}
+
+/* ---------- verification ---------- */
+const verify={expected:null,counter:null};
+function fff1Subscribed(){return ble.entries.some(e=>e.characteristic.uuid===FFF1&&e.subscribed);}
+function requireNotify(){if(!fff1Subscribed())throw Error('請先連線並開啟 FFF1 通知。');}
+function armCompare(b){
+ requireNotify();
+ if(!b.length)throw Error('請輸入預期資料。');
+ verify.expected=b;verify.counter=null;
+ show('check',`等待下一筆 FFF1 通知：${hex(b)}`,'warn');
+}
+function armCounter(total){
+ requireNotify();
+ verify.expected=null;verify.counter=newCounter(total);
+ show('check',summary(verify.counter),'warn',false);
+ log(`COUNTER armed: expecting sequences 0..${total-1}`);
+}
+function finishCounter(note=''){
+ const c=verify.counter;if(!c)return;
+ verify.counter=null;
+ const text=summary(c,true)+note;
+ show('check',text,text.startsWith('PASS')?'ok':'bad');
+}
+function disarm(reason){
+ if(verify.expected){verify.expected=null;show('check',`FAIL：${reason}`,'bad');}
+ finishCounter(`（${reason}）`);
+}
+function onFff1Notify(b){
+ if(verify.expected){
+  const ok=equal(verify.expected,b);
+  show('check',`${ok?'PASS':'FAIL'} | 預期 ${hex(verify.expected)} | 收到 ${hex(b)}`,ok?'ok':'bad');
+  verify.expected=null;
+ }
+ if(verify.counter){
+  track(verify.counter,b);
+  if(counterComplete(verify.counter))finishCounter();
+  else show('check',summary(verify.counter),'warn',false);
+ }
+}
+
+/* ---------- script API ---------- */
+const api={online:null,session:null,eventId:0,state:null,requesting:false,polling:false};
+async function callApi(path,options={}){
+ const {timeoutMs=4000,...request}=options,controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),timeoutMs);
+ try{
+  const response=await fetch(path,{cache:'no-store',...request,signal:controller.signal});
+  let data;try{data=JSON.parse(await response.text());}catch{throw Error(`API 回覆不是 JSON（HTTP ${response.status}）`);}
+  if(!response.ok||data.ok===false)throw Error(data.error||`API HTTP ${response.status}`);
+  return data;
+ }catch(e){if(e.name==='AbortError')throw Error(`API 逾時（${timeoutMs} ms）`);throw e;}
+ finally{clearTimeout(timer);}
+}
+const uartReady=()=>api.online&&!api.requesting&&!api.state?.busy;
+function renderUart(){
+ for(const b of document.querySelectorAll('button.uart'))b.disabled=!uartReady();
+ if(api.online===false)return;
+ const s=api.state;if(!s)return;
+ const parts=[`腳本已連接：${s.port} ${s.baud} 8N1`,`BLE link ${s.connected?'已連線':'未連線'}`];
+ if(s.busy)parts.push(s.action==='cooldown'?'逾時冷卻中…':`執行中：${s.action}${s.total>1?` ${s.done}/${s.total}`:''}`);
+ else if(s.last)parts.push(`上次 ${s.last.action}：${s.last.ok?'成功':'失敗 — '+s.last.message}`);
+ const o=$('uartState');o.textContent=parts.join(' · ');o.className=s.busy?'warn':(s.last&&!s.last.ok?'bad':'');
+}
+async function poll(){
+ if(api.polling)return;
+ api.polling=true;
+ try{
+  const d=await callApi(`/api/events?after=${api.eventId}`);
+  if(api.session&&d.session!==api.session){api.eventId=0;log('SCRIPT 已重新啟動；重新同步事件。');}
+  api.session=d.session;
+  for(const ev of d.events||[]){if(ev.id>api.eventId){api.eventId=ev.id;log(`SCRIPT ${ev.text}`);}}
+  if(api.online===false)log('SCRIPT API 已恢復連線');
+  api.online=true;api.state=d.state;
+ }catch(e){
+  if(api.online!==false){log(`SCRIPT API ERROR ${e.message}`);show('uartState',`腳本 API 未連線：${e.message}`,'bad',false);}
+  api.online=false;
+ }finally{api.polling=false;renderUart();}
+}
+async function uartAction(action,payload={}){
+ if(!uartReady())return false;
+ api.requesting=true;renderUart();
+ try{
+  await callApi('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...payload})});
+  return true;
+ }catch(e){show('uartState',`UART 操作失敗：${e.message}`,'bad');return false;}
+ finally{api.requesting=false;await poll();}
+}
+function uartPayload(){
+ const encoding=$('uartEncoding').value;
+ const b=bytes($('uartPayload').value,encoding);
+ if(!b.length||b.length>MAX_PAYLOAD)throw Error(`UART 資料需 1–${MAX_PAYLOAD} bytes；初始測試請使用不超過 20 bytes。`);
+ return {bytes:b,request:{value:$('uartPayload').value,encoding:encoding==='text'?'Text':'Hex'}};
+}
+function counterRequest(){
+ return {count:intIn('uartCount',1,65536,'Counter 筆數'),intervalMs:intIn('uartInterval',10,60000,'間隔')};
+}
+/* Arm verification first so a fast notification cannot arrive before we listen. */
+async function sendWithCheck(arm,action,payload){
+ try{arm();}catch(e){show('check',e.message,'bad');return;}
+ if(!await uartAction(action,payload)){verify.expected=null;verify.counter=null;show('check','已取消：UART 指令未排程。','bad');}
+}
+function guarded(fn){return()=>{try{fn();}catch(e){show('uartState',e.message,'bad');}};}
+
+for(const b of document.querySelectorAll('button.uart[data-action]'))
+ b.onclick=()=>uartAction(b.dataset.action,b.dataset.value?{value:b.dataset.value}:{});
+$('uartSetName').onclick=()=>uartAction('name',{value:$('uartName').value,encoding:'Text'});
+$('uartSetPower').onclick=guarded(()=>uartAction('power',{value:String(intIn('uartPower',0,15,'功率代碼'))}));
+$('uartSend').onclick=guarded(()=>uartAction('send',uartPayload().request));
+$('uartSendCheck').onclick=guarded(()=>{const p=uartPayload();sendWithCheck(()=>armCompare(p.bytes),'send',p.request);});
+$('uartCounter').onclick=guarded(()=>uartAction('counter',counterRequest()));
+$('uartCounterCheck').onclick=guarded(()=>{const r=counterRequest();sendWithCheck(()=>armCounter(r.count),'counter',r);});
+
+/* ---------- BLE ---------- */
+const ble={device:null,generation:0,busy:false,entries:[]};
+const bleConnected=()=>!!ble.device?.gatt?.connected;
+function bleControls(){
+ const on=bleConnected();
+ $('connect').disabled=ble.busy||on;
+ $('disconnect').disabled=!ble.device;
+ $('readall').disabled=ble.busy||!on;
+ for(const e of ble.entries)for(const b of e.buttons)b.disabled=ble.busy||!on;
+}
+async function runBle(fn){
+ if(ble.busy)return;
+ ble.busy=true;bleControls();
+ try{await fn();}catch(e){show('state',`錯誤 ${e.name||''}：${e.message}`,'bad');}
+ finally{ble.busy=false;bleControls();}
+}
+function clearConnection(message){
+ ble.generation++;
+ for(const e of ble.entries)e.characteristic.removeEventListener('characteristicvaluechanged',e.listener);
+ ble.entries=[];
+ disarm('連線中斷');
+ $('characteristics').textContent='尚未連線；重新連線後需重新訂閱。';
+ show('state',message);bleControls();
+}
+function received(entry,event){
+ const v=event.target.value,b=new Uint8Array(v.buffer,v.byteOffset,v.byteLength).slice();
+ // A read can also dispatch characteristicvaluechanged; it must not count as a notification.
+ const kind=entry.reading?'READ EVENT':(entry.subscribed?'NOTIFY':'VALUE');
+ entry.output.textContent=`${kind} | HEX ${hex(b)} | UTF-8 ${utf8(b)}`;
+ log(`${kind} ${entry.characteristic.uuid} ${hex(b)} | UTF8 ${utf8(b)}`);
+ if(kind!=='NOTIFY')return;
+ entry.count++;entry.countLabel.textContent=`通知筆數：${entry.count}`;
+ if(entry.characteristic.uuid===FFF1)onFff1Notify(b);
+}
+const PROPS=['read','write','writeWithoutResponse','notify','indicate','authenticatedSignedWrites','reliableWrite','writableAuxiliaries'];
+function el(tag,parent,props={}){const n=Object.assign(document.createElement(tag),props);parent.append(n);return n;}
+function makeCharacteristic(c,parent,token){
+ const article=el('article',parent);
+ el('h3',article,{className:'uuid',textContent:c.uuid});
+ el('p',article,{className:'badge',textContent:PROPS.filter(n=>c.properties[n]).join(' · ')||'無可用屬性'});
+ const row=el('div',article,{className:'row'});
+ const output=el('output',article);
+ const countLabel=el('p',article,{textContent:'通知筆數：0'});
+ const e={characteristic:c,buttons:[],output,countLabel,count:0,subscribed:false,reading:false};
+ e.listener=event=>received(e,event);
+ c.addEventListener('characteristicvaluechanged',e.listener);
+ ble.entries.push(e);
+ const button=(label,fn)=>{
+  const b=el('button',row,{textContent:label});e.buttons.push(b);
+  b.onclick=()=>runBle(async()=>{if(token!==ble.generation||!bleConnected())throw Error('連線已失效，請重新連線。');await fn(b);});
+ };
+ if(c.properties.read){
+  e.read=async()=>{
+   e.reading=true;
+   try{const v=await c.readValue(),b=new Uint8Array(v.buffer,v.byteOffset,v.byteLength);output.textContent=`READ ${hex(b)} | UTF-8 ${utf8(b)}`;log(`READ ${c.uuid} ${hex(b)}`);}
+   finally{e.reading=false;}
+  };
+  button('讀取',e.read);
+ }
+ const write=async withResponse=>{
+  const b=bytes($('payload').value,$('encoding').value);
+  if(!b.length||b.length>MAX_PAYLOAD)throw Error(`寫入資料需 1–${MAX_PAYLOAD} bytes；初始測試請使用不超過 20 bytes。`);
+  if(withResponse)await c.writeValueWithResponse(b);else await c.writeValueWithoutResponse(b);
+  log(`WRITE ${withResponse?'response':'without response'} ${c.uuid} ${hex(b)}；請比對 SCRIPT BLE WRITE`);
+ };
+ if(c.properties.write)button('寫入（有回覆）',()=>write(true));
+ if(c.properties.writeWithoutResponse)button('寫入（無回覆）',()=>write(false));
+ if(c.properties.notify||c.properties.indicate)button('開始通知／指示',async b=>{
+  if(e.subscribed){await c.stopNotifications();e.subscribed=false;b.textContent='開始通知／指示';log(`UNSUBSCRIBE ${c.uuid}`);}
+  else{await c.startNotifications();e.subscribed=true;b.textContent='停止通知／指示';log(`SUBSCRIBE ${c.uuid}`);}
+ });
+ if(!e.buttons.length)output.textContent='Chrome 沒有提供此項目的可用操作。';
+}
+$('connect').onclick=()=>runBle(async()=>{
+ if(!navigator.bluetooth||!window.isSecureContext)throw Error('需在支援 Web Bluetooth 的 Chrome 使用 localhost 或 HTTPS。');
+ const services=[...new Set([FFF0,...$('services').value.split(/[\s,]+/).filter(Boolean).map(uuid)])];
+ const selected=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:services});
+ if(ble.device)ble.device.gatt.disconnect();
+ ble.device=selected;clearConnection('正在連線…');
+ const token=ble.generation;
+ const disconnected=()=>{if(ble.device===selected){ble.device=null;clearConnection('已斷線；請重新連線並訂閱。');}};
+ selected.addEventListener('gattserverdisconnected',disconnected,{once:true});
+ try{
+  const server=await selected.gatt.connect();
+  if(token!==ble.generation){server.disconnect();throw Error('連線已取消。');}
+  const box=$('characteristics');box.replaceChildren();
+  for(const serviceId of services){
+   try{
+    const service=await server.getPrimaryService(serviceId);
+    const chars=await service.getCharacteristics();
+    if(token!==ble.generation)throw Error('探索期間連線中斷。');
+    el('h3',box,{className:'uuid',textContent:`Service ${service.uuid}`});
+    for(const c of chars)makeCharacteristic(c,box,token);
+    log(`SERVICE ${service.uuid}: ${chars.map(c=>c.uuid).join(', ')}`);
+   }catch(e){log(`SERVICE ${serviceId} 無法存取／不存在：${e.message}`);}
+  }
+  if(token===ble.generation)show('state',`已連線：${selected.name||'未命名裝置'}；${ble.entries.length} 個可存取 Characteristic。請手動訂閱 FFF1。`,'ok');
+ }catch(e){
+  selected.removeEventListener('gattserverdisconnected',disconnected);selected.gatt.disconnect();
+  if(ble.device===selected){ble.device=null;clearConnection('連線失敗。');}
+  throw e;
+ }
+});
+$('readall').onclick=()=>runBle(async()=>{
+ const token=ble.generation;
+ for(const e of ble.entries.filter(e=>e.read)){
+  if(token!==ble.generation)throw Error('讀取期間連線中斷。');
+  try{await e.read();}catch(error){log(`READ ERROR ${e.characteristic.uuid}: ${error.message}`);e.output.textContent=error.message;}
+ }
+});
+$('disconnect').onclick=()=>{const old=ble.device;ble.device=null;old?.gatt?.disconnect();clearConnection('已斷線；請重新連線並訂閱。');};
+
+/* ---------- manual verification ---------- */
+$('fixed').onclick=()=>{$('encoding').value='hex';$('payload').value=FIXED;};
+$('compare').onclick=()=>{try{armCompare(bytes($('payload').value,$('encoding').value));}catch(e){show('check',e.message,'bad');}};
+$('counter').onclick=()=>{try{armCounter(intIn('uartCount',1,65536,'Counter 筆數'));}catch(e){show('check',e.message,'bad');}};
+$('finish').onclick=()=>finishCounter();
+
+/* ---------- log tools ---------- */
+$('export').onclick=()=>{
+ const url=URL.createObjectURL(new Blob([records.join('\n')+'\n'],{type:'text/plain;charset=utf-8'}));
+ const a=document.createElement('a');a.href=url;a.download=`bm7701-${new Date().toISOString().replace(/[:.]/g,'-')}.log`;a.click();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+$('clearLog').onclick=()=>{records.length=0;renderLog();};
+
+function selftest(){
+ const assert=(v,m)=>{if(!v)throw Error(m);};
+ assert(hex(bytes('00 ff 78','hex'))==='00 FF 78','hex');
+ assert(bytes('心','text').length===3,'utf8');
+ for(const h of ['0','GG','0xFF']){let failed=false;try{bytes(h,'hex');}catch{failed=true;}assert(failed,'reject hex '+h);}
+ assert(uuid('0xFFF0')===FFF0&&uuid('180a')===full('180a'),'uuid');
+ const frame=i=>Uint8Array.of(0x42,0x4d,i&255,i>>8,0,1,2,3,4,5);
+ const c=newCounter();for(let i=0;i<100;i++)track(c,frame(i));
+ assert(counterComplete(c)&&summary(c,true).startsWith('PASS'),'100 frames');
+ track(c,frame(0));assert(summary(c,true).startsWith('FAIL'),'duplicates');
+ const big=newCounter(300);for(let i=0;i<300;i++)track(big,frame(i));
+ assert(summary(big,true).startsWith('PASS'),'16-bit sequence above 255');
+ const swapped=newCounter(3);[0,2,1].forEach(i=>track(swapped,frame(i)));
+ assert(swapped.order>0&&summary(swapped,true).startsWith('FAIL'),'out of order');
+ const out=newCounter(2);track(out,frame(5));assert(out.bad===1,'sequence beyond total');
+ const bad=newCounter();track(bad,Uint8Array.of(0));assert(bad.bad===1&&summary(bad,true).startsWith('FAIL'),'corrupt/missing');
+ return 'PASS：HEX、UTF-8、UUID、counter 完整／重複／亂序／超界／損壞／缺包檢查（無硬體）。';
+}
+$('selftest').onclick=()=>{try{show('check',selftest(),'ok');}catch(e){show('check','FAIL '+e.message,'bad');}};
+
+/* ---------- start ---------- */
+bleControls();renderUart();
+if(!navigator.bluetooth||!window.isSecureContext)show('state','此瀏覽器無 Web Bluetooth 或不是安全來源；可執行離線檢查，實機請用電腦 Chrome localhost。','warn');
+poll();
+const pollTimer=setInterval(poll,POLL_MS);
+window.addEventListener('beforeunload',()=>{clearInterval(pollTimer);if(logTimer)clearTimeout(logTimer);});
+</script>
+</body>
+</html>
