@@ -1,30 +1,36 @@
 # 聽見你的心（Hear Your Heart）
 
-一套結合穿戴式感測器、嵌入式揚聲器與 Flutter APP 的智慧音樂系統。專案根據使用者的即時心率、呼吸與活動狀態分析身體狀況，動態選擇合適的音樂與節奏。
+專案以 BM7701-00-1 感測端與 HUB 8735 Ultra 嵌入式揚聲器為核心，播放時依心率更新目標 BPM，供自動選曲使用。產品手機 App 暫不納入目前範圍；apps/remote_sensor_simulator 是感測器測試工具。
 
 ## 專案檔案結構
 
 ```text
 hear-your-heart/
-├── apps/                      # 可獨立建置的應用程式
-│   └── phone/                 # Flutter 行動應用程式
+├── .agents/                     # 專案記憶
+├── apps/
+│   ├── phone/                   # Flutter App，目前不在產品範圍
+│   └── remote_sensor_simulator/ # 感測器測試工具
 ├── assets/
-│   └── hardware/              # 硬體架構圖與相關文件
-├── docs/                      # 專案文件與參考資料
-│   ├── ble/
-│   ├── hub8735/
-│   └── references/
-├── external/                  # 外部 SDK 與第三方函式庫子模組
+│   ├── hardware/                # 硬體架構圖與相關文件
+│   └── software/                # 系統、資料流程圖與預覽圖
+├── docs/
+│   ├── ble/                     # 通用 BLE 文件
+│   ├── hub8735/                 # HUB8735 韌體與音樂流程
+│   ├── remote_sensor/           # BM7701 感測端文件
+│   └── references/              # 原廠文件與參考資料
+├── external/                    # 第三方 SDK 與函式庫
 ├── firmware/
 │   ├── hub8735-ultra/
-│   │   ├── application/       # HUB8735 Ultra 主程式
-│   │   ├── examples/          # BLE、音訊、顯示、檔案系統與影像範例
-│   │   └── testdata/          # 韌體測試資料
-│   └── remote_sensor/
-│       ├── scripts/           # UART、燒錄與測試腳本
-│       └── device/            # remote sensor MCU / BLE 韌體
-├── project/                   # 本機專題文件
-├── tools/                     # 本機開發工具
+│   │   ├── application/
+│   │   ├── examples/
+│   │   └── testdata/
+│   └── n76e003/                 # 感測端 MCU 韌體與 BM7701 測試工具
+│       ├── application/
+│       ├── bm7701/              # 模組參考文件
+│       └── scripts/             # UART 與 BLE 測試工具
+├── project/                     # 本機專題文件
+├── tools/                       # 本機開發工具
+├── AGENTS.md                    # 專案工作與架構規則
 └── README.md
 ```
 
