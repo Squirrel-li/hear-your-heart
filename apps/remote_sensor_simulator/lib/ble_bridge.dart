@@ -7,7 +7,7 @@ class BleStatus {
     this.advertising = false,
     this.connected = false,
     this.subscribed = false,
-    this.name = 'BM7701-ITAP',
+    this.name = 'BLE_sensor_ITAP',
     this.error,
   });
 
@@ -25,7 +25,7 @@ class BleStatus {
         advertising: map['advertising'] == true,
         connected: map['connected'] == true,
         subscribed: map['subscribed'] == true,
-        name: map['name'] as String? ?? 'BM7701-ITAP',
+        name: map['name'] as String? ?? 'BLE_sensor_ITAP',
         error: map['error'] as String?,
       );
 }

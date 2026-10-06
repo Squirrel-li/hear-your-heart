@@ -48,7 +48,7 @@ class MainActivity : FlutterActivity() {
     private val connectedDevices = mutableMapOf<String, BluetoothDevice>()
     private val subscribedDevices = mutableMapOf<String, BluetoothDevice>()
 
-    private var broadcastName = "BM7701-ITAP"
+    private var broadcastName = "BLE_sensor_ITAP"
     private var advertising = false
     private var lastNotification = ByteArray(0)
 

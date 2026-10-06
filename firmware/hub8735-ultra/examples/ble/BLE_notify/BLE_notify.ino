@@ -6,7 +6,7 @@
 
 #include "BLEDevice.h"
 
-#define TARGET_NAME "BM7701-ITAP"
+#define TARGET_NAME "BLE_sensor_ITAP"
 
 #define UART_SERVICE_UUID      "FFF0"
 #define CHARACTERISTIC_UUID_TX "FFF1"
