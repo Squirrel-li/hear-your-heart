@@ -7,6 +7,13 @@
 /*    N76E003 P1.3        ->  BM7701 pin 6  RST_N  (active low)                                            */
 /*    3.3 V, common GND                                                                                    */
 /*                                                                                                         */
+/*  PPG  BMH08002-4 / BMH83M002 (oximeter module) on UART0, 38400 8N1                                      */
+/*    N76E003 P0.6 TXD    ->  PPG RX                                                                       */
+/*    N76E003 P0.7 RXD    <-  PPG TX                                                                       */
+/*    PPG EN pin must be HIGH (module enabled); not driven by this firmware                                */
+/*    module frame (15 B): 55 B0 ST D0..D9 CS AA     CS = sum(B0, ST, D0..D9) & 0xFF                       */
+/*    ST/D0..D9 map 1:1 to PpgSensorElement status..ppg2Low (ble-notify-data-format.md section 4)          */
+/*                                                                                                         */
 /*  Timing (BLE API User's Guide V1.00)                                                                    */
 /*    - RST_N low > 5 ms for a full hardware reset                      (1.2 BLE States)                   */
 /*    - after RST_N 0->1 the BC7701 needs 60 ms; during that time it samples its UART TX/RX levels.        */
@@ -26,8 +33,13 @@
 /*              78 03 20 F1 FF  -> notify ON                                                               */
 /*              78 03 26 F1 FF  -> not subscribed yet (_ST_NOT_ENABLE_)                                    */
 /*         optional app handshake: peer writes 0x01 to FFF2 -> 78 04 00 F2 FF 01                           */
-/*    6. Notify ON: one packet every SEND_PERIOD_MS                                                        */
-/*         10 bytes, same as scripts\bm7701.ps1 counter: 42 4D seq_lo seq_hi 00 01 02 03 04 05             */
+/*         the probe is a real PPG frame (only sent when a new PPG sample is ready)                        */
+/*    6. Notify ON: one 22-byte frame per PPG sample (ble-notify-data-format.md, all Big-endian)           */
+/*         [0..1] length = 20   [2..5] sensor_time_ms          [6] msgType = 0x01                          */
+/*         [7..10] PPG sequence  [11] status  [12..21] SpO2 HR bpi hrv amp systole ppg1H ppg1L ppg2H ppg2L */
+/*         needs the enlarged MTU (> 20 B notify payload), no fragmentation                                */
+/*         a new sample is sent after the previous one is ACKed; samples arriving meanwhile are dropped   */
+/*         (the hub sees the gap in sequence)                                                              */
 /*         error ACK -> peer unsubscribed -> back to step 5                                                */
 /*    7. Disconnect (S0 bit0 = 0) -> wait DISC_WAIT_MS -> step 2                                           */
 /*                                                                                                         */
@@ -58,9 +70,20 @@
 #define DISC_WAIT_MS        20      /* spec: 5 ms soft reset after disconnection             */
 #define STATUS_POLL_MS      1000    /* poll connection status while waiting                  */
 #define NOTIFY_PROBE_MS     500     /* try FFF1 send while waiting for subscription          */
-#define SEND_PERIOD_MS      1000    /* data period once notify is on                         */
 #define ADV_RETRY_MS        500
 #define FRAME_GAP_MS        20      /* drop an incomplete frame after this gap               */
+
+/* PPG on UART0: Timer1 mode 2, SMOD = 1, T1M = 1 -> baud = Fsys / (16 * (256 - TH1)) */
+/* 16.6 MHz: 256 - 27 -> 38426 bps (+0.07 %)    16.0 MHz: 256 - 26 -> 38462 bps (+0.16 %) */
+#if USE_HIRC_166
+#define PPG_TH1             (256 - 27)
+#else
+#define PPG_TH1             (256 - 26)
+#endif
+#define PPG_SEND_START      1       /* 1 = send "start measure" (55 B1 01 00 00 00 B2 AA) at boot */
+                                    /* The module must be in timed / continuous upload mode       */
+                                    /* (EEPROM 0x01 mode 0x00/01/04/05/06/07). In ask-response     */
+                                    /* mode (0x02/03) it does not send 55 B0 frames by itself.     */
 
 /* BM7701 reset pin */
 #define BM_RST              P13
@@ -127,13 +150,17 @@
 #define T0_RELOAD_L         0xCB
 #endif
 
-volatile UINT16 g_ms = 0;
+/* 32-bit ms counter = g_ms_hi:g_ms (wraps after ~49.7 days).                 */
+/* State timing only uses the low 16 bits (now_ms), the BLE sensor_time_ms   */
+/* uses all 32 bits.                                                          */
+volatile UINT16 g_ms    = 0;
+volatile UINT16 g_ms_hi = 0;
 
 void Timer0_ISR(void) interrupt 1
 {
     TH0 = T0_RELOAD_H;
     TL0 = T0_RELOAD_L;
-    g_ms++;
+    if (++g_ms == 0) g_ms_hi++;
 }
 
 static UINT16 now_ms(void)
@@ -431,25 +458,129 @@ static void bm_query_status(void)
     bm_send_cmd(BM_TYPE_STATUS, BM_FLAG_NONE, 0, 0, CMD_TIMEOUT_MS);
 }
 
-static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len <= 20 (default MTU) */
+static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len > 20 needs the enlarged MTU */
 {
     bm_send_cmd(BM_TYPE_FFF1, BM_FLAG_NOTIFY, dat, len, CMD_TIMEOUT_MS);
 }
 
-/*============================== application data ===========================*/
-UINT16 g_seq = 0;
-xdata UINT8 tx_pkt[10];
+/*============================== PPG (UART0) -> BLE frame ===================*/
+/* BLE frame (ble-notify-data-format.md), Big-endian, one record per frame:  */
+/*   [0..1] length  [2..5] sensor_time_ms    [6] msgType                     */
+/*   [7..10] sequence  [11] status  [12..21] SpO2 .. ppg2Low                 */
+#define SENSOR_PPG          0x01
+#define PKT_LEN             22
+#define PKT_TS              2
+#define PKT_SEQ             7
+#define PKT_ST              11              /* status, first byte copied from the module */
 
-/* 10-byte packet, same format as scripts\bm7701.ps1 counter: 42 4D seq_lo seq_hi 00..05 */
-/* Replace with your sensor data later.                                                   */
-static void build_packet(void)
+xdata UINT8 tx_pkt[PKT_LEN] = { 0x00, PKT_LEN - 2, 0, 0, 0, 0, SENSOR_PPG };
+
+/* The UART0 ISR writes tx_pkt only while ppg_ready = 0; main sends tx_pkt   */
+/* and then clears ppg_ready. ppg_cap is latched at the start of each module */
+/* frame, so a frame is either captured completely or not at all.            */
+bit   ppg_ready = 0;
+bit   ppg_cap   = 0;
+UINT8 ppg_i     = 0;                        /* byte index in the 15-byte module frame */
+UINT8 ppg_sum   = 0;
+UINT8 ppg_seq[4] = { 0, 0, 0, 0 };          /* Big-endian, counts every valid module frame */
+
+void SerialPort0_ISR(void) interrupt 4
+{
+    UINT8 c;
+    if (RI)
+    {
+        c  = SBUF;
+        RI = 0;
+        if (ppg_i == 0)
+        {
+            if (c == 0x55) ppg_i = 1;
+        }
+        else if (ppg_i == 1)
+        {
+            if (c == 0xB0)
+            {
+                ppg_sum = 0xB0;
+                ppg_cap = !ppg_ready;
+                ppg_i   = 2;
+            }
+            else if (c != 0x55)
+            {
+                ppg_i = 0;                  /* 55 55 B0: stay synced on the second 55 */
+            }
+        }
+        else if (ppg_i < 13)                /* ST, D0..D9 */
+        {
+            ppg_sum += c;
+            if (ppg_cap) tx_pkt[PKT_ST - 2 + ppg_i] = c;
+            ppg_i++;
+        }
+        else if (ppg_i == 13)               /* checksum */
+        {
+            ppg_i = (c == ppg_sum) ? 14 : 0;
+        }
+        else                                /* tail 0xAA */
+        {
+            ppg_i = 0;
+            if (c == 0xAA)
+            {
+                if (ppg_cap)
+                {
+                    /* Timer0 has the same priority, so g_ms cannot change here */
+                    tx_pkt[PKT_TS + 0] = (UINT8)(g_ms_hi >> 8);
+                    tx_pkt[PKT_TS + 1] = (UINT8)g_ms_hi;
+                    tx_pkt[PKT_TS + 2] = (UINT8)(g_ms >> 8);
+                    tx_pkt[PKT_TS + 3] = (UINT8)g_ms;
+                    tx_pkt[PKT_SEQ + 0] = ppg_seq[0];
+                    tx_pkt[PKT_SEQ + 1] = ppg_seq[1];
+                    tx_pkt[PKT_SEQ + 2] = ppg_seq[2];
+                    tx_pkt[PKT_SEQ + 3] = ppg_seq[3];
+                    ppg_ready = 1;
+                }
+                if (++ppg_seq[3] == 0)
+                    if (++ppg_seq[2] == 0)
+                        if (++ppg_seq[1] == 0)
+                            ++ppg_seq[0];
+            }
+        }
+    }
+    /* TI is not touched here; ppg_start() polls it with ES off */
+}
+
+static void UART0_Init(void)
+{
+    P06_Quasi_Mode;                         /* TXD */
+    P07_Quasi_Mode;                         /* RXD */
+    SCON = 0x50;                            /* mode 1, REN = 1, TI = 0 */
+    TMOD = (TMOD & 0x0F) | 0x20;            /* Timer1 mode 2, auto reload */
+    set_SMOD;                               /* double rate */
+    set_T1M;                                /* Timer1 clock = Fsys */
+    clr_BRCK;                               /* UART0 baud source = Timer1 (Timer3 is UART1's) */
+    TH1 = PPG_TH1;
+    set_TR1;
+}
+
+#if PPG_SEND_START
+code UINT8 ppg_start_cmd[8] = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x00, 0xB2, 0xAA };
+
+static void ppg_start(void)                 /* reply 55 B1 .. is ignored by the parser */
 {
     UINT8 i;
-    tx_pkt[0] = 0x42;
-    tx_pkt[1] = 0x4D;
-    tx_pkt[2] = (UINT8)(g_seq & 0xFF);
-    tx_pkt[3] = (UINT8)(g_seq >> 8);
-    for (i = 0; i < 6; i++) tx_pkt[4 + i] = i;
+    clr_ES;
+    for (i = 0; i < 8; i++)
+    {
+        TI = 0;
+        SBUF = ppg_start_cmd[i];
+        while (TI == 0);
+    }
+    TI = 0;
+    set_ES;
+}
+#endif
+
+static void ppg_send(void)
+{
+    bm_notify_send(tx_pkt, PKT_LEN);        /* blocking: tx_pkt is fully sent on return */
+    ppg_ready = 0;
 }
 
 /*============================== main =======================================*/
@@ -475,7 +606,9 @@ void main(void)
 
     UART1_Init();                               /* TX idle = high, required during BM7701 boot */
     Timer0_Tick_Init();
+    UART0_Init();                               /* PPG, after UART1_Init (both touch BRCK) */
     set_ES_1;                                   /* UART1 interrupt */
+    set_ES;                                     /* UART0 interrupt */
     set_EA;
 
     t_state = now_ms();
@@ -497,6 +630,9 @@ void main(void)
             t_state = t;
         }
 
+        /* not streaming: drop the sample so the first frame after subscription is fresh */
+        if (state != ST_WAIT_NOTIFY && state != ST_NOTIFY) ppg_ready = 0;
+
         switch (state)
         {
         case ST_RESET:                              /* RST_N low */
@@ -515,6 +651,9 @@ void main(void)
                 g_connected = 0;
                 g_rx_any    = 0;
                 g_frm_any   = 0;
+#if PPG_SEND_START
+                ppg_start();                    /* ~200 ms after power-up */
+#endif
                 bm_set_auto_status();
                 state = ST_FEATURE;
             }
@@ -603,7 +742,6 @@ void main(void)
                 /* first packet accepted -> peer has subscribed FFF1 */
                 cmd_state = CMD_IDLE;
                 g_notify = 1;
-                g_seq++;
 #if USE_LED
                 t_pkt = t;                          /* LED flash */
 #endif
@@ -611,13 +749,19 @@ void main(void)
                 t_state = t;
                 break;
             }
-            cmd_state = CMD_IDLE;                       /* 0x26 = not subscribed yet */
-            if (g_app_ready || (UINT16)(t - t_state) >= NOTIFY_PROBE_MS)
+            cmd_state = CMD_IDLE;                       /* 0x26 = not subscribed yet (sample lost) */
+            if (ppg_ready)
             {
-                g_app_ready = 0;
-                build_packet();
-                bm_notify_send(tx_pkt, sizeof(tx_pkt));
-                t_state = t;
+                if (g_app_ready || (UINT16)(t - t_state) >= NOTIFY_PROBE_MS)
+                {
+                    g_app_ready = 0;
+                    ppg_send();                         /* probe with a real PPG frame */
+                    t_state = t;
+                }
+                else
+                {
+                    ppg_ready = 0;                      /* between probes: keep the next sample fresh */
+                }
             }
             break;
 
@@ -632,20 +776,14 @@ void main(void)
                 t_state = t;
                 break;
             }
+#if USE_LED
             if (cmd_state == CMD_OK && cmd_type == BM_TYPE_FFF1)
             {
-                g_seq++;
-#if USE_LED
                 t_pkt = t;                          /* LED flash */
+            }
 #endif
-            }
             cmd_state = CMD_IDLE;
-            if ((UINT16)(t - t_state) >= SEND_PERIOD_MS)
-            {
-                build_packet();
-                bm_notify_send(tx_pkt, sizeof(tx_pkt));
-                t_state = t;
-            }
+            if (ppg_ready) ppg_send();              /* one frame per PPG sample */
             break;
 
         case ST_DISC_WAIT:                              /* no command for 5 ms after disconnect */
