@@ -113,7 +113,7 @@ void analysisTask(void* parameter)
 
         const uint32_t now = millis();
         if (haveValidPpg &&
-            (uint32_t)(now - latest.receive_timestamp) <= 6000u &&
+            (uint32_t)(now - latest.hub_rx_time_ms) <= 6000u &&
             bpmState.hrmax != 0) {
             if (!haveUpdatedBpm ||
                 (uint32_t)(now - lastBpmUpdateMs) >= 1000u) {

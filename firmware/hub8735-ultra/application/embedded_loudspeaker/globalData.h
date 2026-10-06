@@ -38,28 +38,23 @@ extern UserInfo userInfo;
 
 // Big-endian format
 
-// BLE frame data
-// | length | data |
-// | 2B     | nB   |
-
-// data
-// | device_timestamp | sensorId | data |
-// | device_timestamp | sensorId | data |
-// | 4B               | 1B       | nB   |
+// BLE frame (one FFF1 notify, no length prefix; the notify carries the length)
+// | sensor_time_ms | msgType | payload |
+// | 4B             | 1B      | nB      |
 struct BleFrameElement {
-    uint32_t receive_timestamp;
+    uint32_t hub_rx_time_ms;
     uint16_t length;
     uint8_t data[BLE_FRAME_MAX];
 };
 
-// PPG 感測資料
+// PPG 感測資料 payload (msgType 0x01), frame = 20B
 // | sequence | status | SpO2 | heartRateBpm | bpi | hrv |
 // | 4B       | 1B     | 1B   | 1B           | 1B  | 1B  |
 // | pulseAmplitude | systoleDuration | ppg1High | ppg1Low | ppg2High | ppg2Low |
 // | 1B             | 1B              | 1B       | 1B      | 1B       | 1B      |
 struct PpgSensorElement {
-    uint32_t receive_timestamp;
-    uint32_t device_timestamp;
+    uint32_t hub_rx_time_ms;
+    uint32_t sensor_time_ms;
     uint32_t sequence;
     uint8_t status; // 0: finger off, 1: finger on, 2: get data
     uint8_t SpO2;   // Blood Oxygen Saturation in percentage
@@ -73,11 +68,12 @@ struct PpgSensorElement {
 };
 
 // G sensor 三軸資料
+// payload (msgType 0x02), frame = 21B
 // | sequence | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z |
 // | 4B       | 2B    | 2B    | 2B    | 2B     | 2B     | 2B     |
 struct GSensorElement {
-    uint32_t receive_timestamp;
-    uint32_t device_timestamp;
+    uint32_t hub_rx_time_ms;
+    uint32_t sensor_time_ms;
     uint32_t sequence;
     int16_t acc_x;
     int16_t acc_y;

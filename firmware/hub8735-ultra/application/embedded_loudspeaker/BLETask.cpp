@@ -8,6 +8,129 @@ BLERemoteService* UartService = nullptr;
 BLERemoteCharacteristic* Rx = nullptr;
 BLERemoteCharacteristic* Tx = nullptr;
 
+namespace {
+
+constexpr uint32_t BLE_SCAN_MS = 2000;
+constexpr uint32_t BLE_CONNECT_TIMEOUT_MS = 3000;
+constexpr uint32_t BLE_DISCOVERY_TIMEOUT_MS = 10000;
+constexpr uint32_t BLE_RETRY_DELAY_MS = 3000;
+
+volatile bool targetFound = false;
+bool clientConfigured = false;
+int8_t connID = -1;
+
+// The BLE library deletes the client and its services on disconnect.
+void clearRemoteHandles()
+{
+    client = nullptr;
+    UartService = nullptr;
+    Rx = nullptr;
+    Tx = nullptr;
+}
+
+bool sensorConnected()
+{
+    return connID >= 0 && BLE.connected(connID);
+}
+
+void dropConnection(const char* reason)
+{
+    DEBUG_PRINT("BLE: ");
+    DEBUG_PRINTLN(reason);
+    if (sensorConnected()) {
+        BLE.configConnection()->disconnect(connID);
+    }
+    connID = -1;
+    clearRemoteHandles();
+}
+
+bool connectSensor()
+{
+    clearRemoteHandles();
+    connID = -1;
+    targetFound = false;
+
+    DEBUG_PRINT("BLE: scanning for ");
+    DEBUG_PRINTLN(TARGET_NAME);
+    BLE.configScan()->startScan(BLE_SCAN_MS);
+    if (!targetFound) {
+        DEBUG_PRINTLN("BLE: target not found");
+        return false;
+    }
+
+    DEBUG_PRINT("BLE: connecting to ");
+    DEBUG_PRINTLN(targetDevice.getAddr().str());
+    if (!BLE.configConnection()->connect(targetDevice, BLE_CONNECT_TIMEOUT_MS)) {
+        DEBUG_PRINTLN("BLE: connect request failed");
+        return false;
+    }
+    const uint32_t connectStart = millis();
+    while ((uint32_t)(millis() - connectStart) < BLE_CONNECT_TIMEOUT_MS) {
+        connID = BLE.configConnection()->getConnId(targetDevice);
+        if (sensorConnected()) break;
+        connID = -1;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (connID < 0) {
+        DEBUG_PRINTLN("BLE: connect timeout");
+        return false;
+    }
+    DEBUG_PRINT("BLE: connected, connID=");
+    DEBUG_PRINTLN(static_cast<int>(connID));
+
+    if (!clientConfigured) {
+        BLE.configClient();
+        clientConfigured = true;
+    }
+    client = BLE.addClient(connID);
+    if (client == nullptr) {
+        dropConnection("add client failed");
+        return false;
+    }
+    client->discoverServices();
+    DEBUG_PRINT("BLE: discovering services");
+    const uint32_t discoveryStart = millis();
+    while (!client->discoveryDone()) {
+        if (!sensorConnected()) {
+            DEBUG_PRINT("\n");
+            dropConnection("disconnected during discovery");
+            return false;
+        }
+        if ((uint32_t)(millis() - discoveryStart) >= BLE_DISCOVERY_TIMEOUT_MS) {
+            DEBUG_PRINT("\n");
+            dropConnection("service discovery timeout");
+            return false;
+        }
+        DEBUG_PRINT(".");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    DEBUG_PRINT("\n");
+
+    UartService = client->getService(UART_SERVICE_UUID);
+    if (UartService == nullptr) {
+        dropConnection("UART service not found");
+        return false;
+    }
+    Tx = UartService->getCharacteristic(CHARACTERISTIC_UUID_TX);
+    if (Tx == nullptr) {
+        dropConnection("TX characteristic not found");
+        return false;
+    }
+    DEBUG_PRINTLN("TX characteristic found");
+    Tx->setBufferLen(STRING_BUF_SIZE);
+    Tx->setNotifyCallback(notificationCB);
+    Tx->enableNotifyIndicate();
+    Rx = UartService->getCharacteristic(CHARACTERISTIC_UUID_RX);
+    if (Rx != nullptr) {
+        DEBUG_PRINTLN("RX characteristic found");
+        Rx->setBufferLen(STRING_BUF_SIZE);
+    }
+    DEBUG_PRINTLN("BLE: sensor connected, notifications enabled");
+    return true;
+}
+
+} // namespace
+
 void scanCB(T_LE_CB_DATA* p_data)
 {
     foundDevice.parseScanInfo(p_data);
@@ -16,6 +139,7 @@ void scanCB(T_LE_CB_DATA* p_data)
             DEBUG_PRINT("Found target BLE Device at address ");
             DEBUG_PRINTLN(foundDevice.getAddr().str());
             targetDevice = foundDevice;
+            targetFound = true;
         }
     }
 }
@@ -24,7 +148,7 @@ void notificationCB(BLERemoteCharacteristic* chr, uint8_t* data, uint16_t len)
 {
     // Create a buffer to store the received data
     BleFrameElement msgElement;
-    msgElement.receive_timestamp = millis();
+    msgElement.hub_rx_time_ms = millis();
     msgElement.length = len;
     if (len > BLE_FRAME_MAX) {
         DEBUG_PRINTLN("Error: Received BLE notification data length exceeds buffer size");
@@ -56,81 +180,68 @@ void BLETask(void* parameter) {
     BLE.init();
     BLE.setScanCallback(scanCB);
     BLE.beginCentral(1);
-	
-    BLE.configScan()->startScan(2000);
-    BLE.configConnection()->connect(targetDevice, 2000);
+    DEBUG_PRINTLN("BLE initialized successfully");
 
-	vTaskDelay(2000);
-    int8_t connID = BLE.configConnection()->getConnId(targetDevice);
-	if (!BLE.connected(connID)) {
-        DEBUG_PRINTLN("BLE not connected");
-    } else {
-        BLE.configClient();
-        client = BLE.addClient(connID);
-        client->discoverServices();
-        DEBUG_PRINT("Discovering services of connected device");
-        do {
-            DEBUG_PRINT(".");
-            delay(1000);
-        } while (!(client->discoveryDone()));
-        DEBUG_PRINT("\n");
-
-        UartService = client->getService(UART_SERVICE_UUID);
-        if (UartService != nullptr) {
-            Tx = UartService->getCharacteristic(CHARACTERISTIC_UUID_TX);
-            if (Tx != nullptr) {
-                DEBUG_PRINTLN("TX characteristic found");
-                Tx->setBufferLen(STRING_BUF_SIZE);
-                Tx->setNotifyCallback(notificationCB);
-                Tx->enableNotifyIndicate();
-            }
-            Rx = UartService->getCharacteristic(CHARACTERISTIC_UUID_RX);
-            if (Rx != nullptr) {
-                DEBUG_PRINTLN("RX characteristic found");
-                Rx->setBufferLen(STRING_BUF_SIZE);
+    bool linkUp = connectSensor();
+    uint32_t lastAttemptMs = millis();
+	while (true) {
+        if (linkUp && !sensorConnected()) {
+            linkUp = false;
+            connID = -1;
+            clearRemoteHandles();
+            lastAttemptMs = millis();
+            DEBUG_PRINTLN("BLE: sensor disconnected, will reconnect");
+        }
+        if (!linkUp &&
+            (uint32_t)(millis() - lastAttemptMs) >= BLE_RETRY_DELAY_MS) {
+            DEBUG_PRINTLN("BLE: reconnecting");
+            linkUp = connectSensor();
+            lastAttemptMs = millis();
+            if (!linkUp) {
+                DEBUG_PRINT("BLE: reconnect failed, retry in ");
+                DEBUG_PRINT(BLE_RETRY_DELAY_MS);
+                DEBUG_PRINTLN(" ms");
             }
         }
-    }
-    DEBUG_PRINTLN("BLE initialized successfully");
-	while (true) {
+
         BleFrameElement msgElement;
         if (xQueueReceive(bleRxFrameQueue, &msgElement, 0) == pdPASS) {
             if (msgElement.length < 9) {
                 DEBUG_PRINTLN("Error: Received BLE frame is too short");
                 continue; // Skip processing for this frame
             }
-            uint32_t device_timestamp =
+            uint32_t sensor_time_ms =
                 (static_cast<uint32_t>(msgElement.data[0]) << 24) |
                 (static_cast<uint32_t>(msgElement.data[1]) << 16) |
                 (static_cast<uint32_t>(msgElement.data[2]) << 8) |
                 static_cast<uint32_t>(msgElement.data[3]);
-            uint8_t sensorId = msgElement.data[4];
+            uint8_t msgType = msgElement.data[4];
             uint32_t sequence =
                 (static_cast<uint32_t>(msgElement.data[5]) << 24) |
                 (static_cast<uint32_t>(msgElement.data[6]) << 16) |
                 (static_cast<uint32_t>(msgElement.data[7]) << 8) |
                 static_cast<uint32_t>(msgElement.data[8]);
-            DEBUG_PRINT("BLETask <- BLE callback: sensorId=");
-            DEBUG_PRINT(sensorId);
+            DEBUG_PRINT("BLETask <- BLE callback: msgType=");
+            DEBUG_PRINT(msgType);
             DEBUG_PRINT(" sequence=");
             DEBUG_PRINTLN(sequence);
-            // DEBUG_PRINT("BLETask: Received BLE frame with sensor ID: ");
-            // DEBUG_PRINTLN(sensorId);
+            // DEBUG_PRINT("BLETask: Received BLE frame with msgType: ");
+            // DEBUG_PRINTLN(msgType);
             // DEBUG_PRINT("Receive timestamp: ");
-            // DEBUG_PRINTLN(msgElement.receive_timestamp);
+            // DEBUG_PRINTLN(msgElement.hub_rx_time_ms);
             // DEBUG_PRINT("Device timestamp: ");
-            // DEBUG_PRINTLN(device_timestamp);
+            // DEBUG_PRINTLN(sensor_time_ms);
             // DEBUG_PRINT("Sequence: ");
             // DEBUG_PRINTLN(sequence);
             
-            if (sensorId == 0x01) { // PPG sensor
+            if (msgType == 0x01) { // PPG sensor
                 if (msgElement.length < 20) {
                     DEBUG_PRINTLN("Error: PPG sensor data length is less than expected");
                     continue; // Skip processing for this frame
                 }
                 PpgSensorElement ppgElement;
-                ppgElement.receive_timestamp = msgElement.receive_timestamp;
-                ppgElement.device_timestamp = device_timestamp;
+                ppgElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
+                ppgElement.sensor_time_ms = sensor_time_ms;
                 ppgElement.sequence = sequence;
                 ppgElement.status = msgElement.data[9];
                 ppgElement.SpO2 = msgElement.data[10];
@@ -170,14 +281,14 @@ void BLETask(void* parameter) {
                 // DEBUG_PRINTLN(ppgElement.ppg1);
                 // DEBUG_PRINT("PPG2: ");
                 // DEBUG_PRINTLN(ppgElement.ppg2);
-            } else if (sensorId == 0x02) { // G sensor
+            } else if (msgType == 0x02) { // G sensor
                 if (msgElement.length < 21) {
                     DEBUG_PRINTLN("Error: G sensor data length is less than expected");
                     continue; // Skip processing for this frame
                 }
                 GSensorElement gSensorElement;
-                gSensorElement.receive_timestamp = msgElement.receive_timestamp;
-                gSensorElement.device_timestamp = device_timestamp;
+                gSensorElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
+                gSensorElement.sensor_time_ms = sensor_time_ms;
                 gSensorElement.sequence = sequence;
                 gSensorElement.acc_x = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[9]) << 8) | msgElement.data[10]);
                 gSensorElement.acc_y = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[11]) << 8) | msgElement.data[12]);
@@ -205,8 +316,8 @@ void BLETask(void* parameter) {
                 DEBUG_PRINT("Gyro Z: ");
                 DEBUG_PRINTLN(gSensorElement.gyro_z);
             } else {
-                DEBUG_PRINTLN("Unknown sensor ID received");
-                continue; // Skip processing for unknown sensor ID
+                DEBUG_PRINTLN("Unknown msgType received");
+                continue; // Skip processing for unknown msgType
             }
         }
 		vTaskDelay(pdMS_TO_TICKS(100));
