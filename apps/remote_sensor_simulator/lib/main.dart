@@ -35,7 +35,7 @@ class SimulatorPage extends StatefulWidget {
 
 class _SimulatorPageState extends State<SimulatorPage> {
   final _bridge = BleBridge();
-  final _nameController = TextEditingController(text: 'BM7701-ITAP');
+  final _nameController = TextEditingController(text: 'BLE_sensor_ITAP');
   final _scrollController = ScrollController();
 
   StreamSubscription<Map<dynamic, dynamic>>? _events;

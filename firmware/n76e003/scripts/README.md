@@ -7,7 +7,7 @@ Windows PowerShell 5.1 + .NET SerialPort／HttpListener；電腦使用 Chrome We
 - USB-TTL 必須是 3.3 V I/O，TX → BM7701 UART1_RX（Pin 22）、RX → UART1_TX（Pin 23），共地，供電 2.0–3.6 V。不可接 RS-232 或 5 V UART。
 - 模組已正常啟動；預設 115200、8N1、無流控。Reset 後至少等 60 ms。腳本不切換波特率、不拉動 Reset，DTR／RTS 關閉；不要把控制線接成不明的 Reset 電路。
 - 本次設備預設為 COM11；可用參數覆寫。一次只有一個程式能開啟 COM11。
-- 電腦需有可用 Bluetooth，Chrome 需支援 Web Bluetooth；第一次連線須在裝置選擇器選 BM7701-ITAP。
+- 電腦需有可用 Bluetooth，Chrome 需支援 Web Bluetooth；第一次連線須在裝置選擇器選 BLE_sensor_ITAP。
 
 ## 快速開始
 
@@ -37,7 +37,7 @@ powershell -NoProfile -File .\bm7701.ps1 -Command Shell -Port COM11 -LogPath "$e
 | 互動指令                               | 用途                                               |
 | -------------------------------------- | -------------------------------------------------- |
 | `version` / `status`               | 讀版本／連線狀態，保留原始回覆                     |
-| `name BM7701-ITAP`                   | 設定名稱，1–31 UTF-8 bytes                        |
+| `name BLE_sensor_ITAP`                   | 設定名稱，1–31 UTF-8 bytes                        |
 | `advertise on` / `advertise off`   | 開啟／停止廣播                                     |
 | `power 0` 至 `power 15`            | 設定模組功率代碼；不將代碼宣稱為 dBm               |
 | `send 00 01 02 03 04 05 06 07 08 09` | 以 FFF1 發送原始 bytes                             |
@@ -64,7 +64,7 @@ powershell -NoProfile -File .\bm7701.ps1 -Command Counter -Count 100 -IntervalMs
 ## 電腦 Web Bluetooth 操作
 
 1. 先執行 `bm7701.ps1 -Command Web`，然後用電腦 Chrome 開啟 http://127.0.0.1:8771/。
-2. 右側「3 · 電腦 BLE 連線」點「選擇 BM7701 並連線」，選 BM7701-ITAP。
+2. 右側「3 · 電腦 BLE 連線」點「選擇 BM7701 並連線」，選 BLE_sensor_ITAP。
 3. FFF0 中預期 FFF1 支援 Notify、FFF2 支援 Write Without Response；以實際探索屬性為準。
 4. 在「5 · Characteristics」的 FFF1 點「開始通知／指示」；FFF2 可用「寫入（無回覆）」測試電腦 → BM7701 方向，資料取自「4 · 資料與驗證」。
 5. 左側「1 · UART 控制」設定名稱、廣播、功率；「2 · UART → BLE 通知」發送資料或 counter。

@@ -18,8 +18,8 @@ void scanFunction(T_LE_CB_DATA* p_data)
 
     foundDevice.parseScanInfo(p_data);
     if (foundDevice.hasName()) {
-        // if (foundDevice.getName() == String("BM7701-ITAP")) {
-        //     Serial.print("Found BM7701-ITAP at address ");
+        // if (foundDevice.getName() == String("BLE_sensor_ITAP")) {
+        //     Serial.print("Found BLE_sensor_ITAP at address ");
         //     Serial.println(foundDevice.getAddr().str());
         // }
         Serial.print("Found " + String(foundDevice.getName()) + " at address ");
