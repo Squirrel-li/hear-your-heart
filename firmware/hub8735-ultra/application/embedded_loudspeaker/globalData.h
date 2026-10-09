@@ -155,6 +155,7 @@ struct UiUpdateElement {
     uint8_t mode;        // PlayMode
     uint8_t audioState;  // AudioState
     int16_t acc[3];
+    int16_t gyro[3];
     char filename[AUDIO_FILENAME_MAX];
 };
 
