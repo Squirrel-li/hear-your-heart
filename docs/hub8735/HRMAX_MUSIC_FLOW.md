@@ -26,7 +26,7 @@
 
 ## 選歌與切歌
 
-曲目表在 `song_catalog.h`，依 `music1` 到 `music10` 順序循環。符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。
+曲目表在 `song_catalog.h`，共 16 首，檔名為 `bpmNNN.mp3`（NNN 為 BPM），依 BPM 由低到高的順序循環。符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。
 
 - 首次選歌、穩定 Zone 切換：`controlTask` 從目前歌曲的下一首起依序找符合曲目；Zone 切換確認後立即送播放命令。完全沒有符合曲目時播放 BPM 最近的一首。若結果仍是目前歌曲，維持播放。
 - 同一 Zone 內目標 BPM 改變：目前歌曲繼續播完，播畢後用最新目標選下一首。
@@ -36,15 +36,20 @@
 
 ## 離線 BPM 估計
 
-用 FFmpeg 將現有 MP3 解碼，對各曲目前約 180 秒的音訊做頻譜起音強度與自相關分析，再檢查三段各 60 秒的候選節拍。這些數值是**估計值**，節奏可能有半拍／雙拍解讀；換 SD 卡曲目或進行正式展示前，應人工核對。
+原有 10 首（`testdata/audio` 的 `music1`～`music10`）用 FFmpeg 將 MP3 解碼，對各曲目前約 180 秒的音訊做頻譜起音強度與自相關分析，再檢查三段各 60 秒的候選節拍。另 6 首是 FMA 資料集（fma_small，CC BY-NC-SA）的 30 秒片段，BPM 取自 Echonest 的 `tempo`（四捨五入，未在此量測）。這些數值都是**估計值**，節奏可能有半拍／雙拍解讀；換 SD 卡曲目或進行正式展示前，應人工核對。
 
-| 曲目 | BPM | 曲目 | BPM |
-| --- | ---: | --- | ---: |
-| music1 | 75 | music6 | 97 |
-| music2 | 95 | music7 | 135 |
-| music3 | 80 | music8 | 147 |
-| music4 | 85 | music9 | 138 |
-| music5 | 137 | music10 | 132 |
+SD 卡內容放在 `testdata/sd_music`，檔名與原檔對照如下（完整曲名與作者見 `song_catalog.h` 註解）：
+
+| 檔名 | 原檔／來源 | 檔名 | 原檔／來源 |
+| --- | --- | --- | --- |
+| bpm060 | FMA 3264 | bpm132 | music10 |
+| bpm066 | FMA 27552 | bpm135 | music7 |
+| bpm075 | music1 | bpm137 | music5 |
+| bpm080 | music3 | bpm138 | music9 |
+| bpm085 | music4 | bpm147 | music8 |
+| bpm095 | music2 | bpm156 | FMA 1661 |
+| bpm097 | music6 | bpm171 | FMA 1688 |
+| bpm106 | FMA 29602 | bpm117 | FMA 61670 |
 
 ## 本機檢查
 
