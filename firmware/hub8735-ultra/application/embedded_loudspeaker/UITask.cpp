@@ -1,8 +1,347 @@
 #include "UITask.h"
 
+#include "debug.h"
+#include "globalData.h"
+#include "oled_sh1106.h"
+
+namespace {
+
+// OLED on Wire (I2C0: SDA=D3/PE4, SCL=D4/PE3).
+constexpr uint8_t OLED_ADDRESS = 0x3C;
+
+// Buttons wired between pin and GND (internal pull-up, pressed = LOW).
+constexpr uint8_t PIN_UP = 8;
+constexpr uint8_t PIN_DOWN = 9;
+constexpr uint8_t PIN_OK = 10;
+
+constexpr uint32_t POLL_MS = 10;
+constexpr uint32_t REDRAW_MS = 50;
+// Full resend (and placement registers) so a glitched I2C transfer heals by itself.
+constexpr uint32_t REFRESH_MS = 2000;
+
+// Layout (6x8 font, 21 columns, 8 rows aligned to the panel's 8-pixel pages so an
+// update only resends the pages that changed): now playing, 4 menu rows, 3 status
+// rows. The font leaves the bottom pixel row of each cell empty, which holds the lines.
+constexpr int16_t HEADER_Y = 0;
+constexpr int16_t HEADER_LINE_Y = 7;
+constexpr int16_t MENU_Y = 8;
+constexpr uint8_t MENU_ROWS = 4;
+constexpr int16_t DIVIDER_Y = 39;
+constexpr int16_t STATUS_Y[3] = {40, 48, 56};
+
+enum TopItem : uint8_t {
+    TopMode,
+    TopPlay,
+    TopStop,
+    TopVolume,
+    TopCount
+};
+
+// Top: the four items. ModeList / VolumeList: pick a value with OK, which also leaves the list.
+enum class Screen : uint8_t {
+    Top,
+    ModeList,
+    VolumeList
+};
+
+constexpr uint8_t MODE_COUNT = 3;
+constexpr uint8_t VOLUME_STEP = 10;
+constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
+
+struct Button {
+    uint8_t pin;
+    uint8_t history;  // last 8 samples, 1 = pressed
+    bool down;
+};
+
+OledSh1106 oled(&Wire, OLED_ADDRESS);
+
+Button buttons[3] = {{PIN_UP, 0, false}, {PIN_DOWN, 0, false}, {PIN_OK, 0, false}};
+
+Screen screen = Screen::Top;
+uint8_t cursor = TopMode;
+uint8_t menuTop = 0;
+
+// Reported by controlTask / audioTask.
+PlayMode playMode = PlayMode::Enjoy;
+AudioState audioState = AudioState::Stopped;
+char nowPlaying[AUDIO_FILENAME_MAX] = "";
+// ponytail: Volume is mirrored from menu changes only; the serial "volume" command
+// can make it differ. Have audioTask report the volume if that matters.
+uint8_t volumePercent = 50;  // audioTask starts at 50%
+
+uint32_t lastRefreshMs = 0;
+
+bool bleConnected = false;
+bool havePpg = false;
+uint16_t heartRate = 0;
+uint8_t spo2 = 0;
+uint8_t ppgStatus = 0;
+bool haveGSensor = false;
+int16_t acc[3] = {0, 0, 0};
+
+const char* modeName(PlayMode mode)
+{
+    switch (mode) {
+    case PlayMode::Enjoy: return "Enjoy";
+    case PlayMode::Train: return "Train";
+    default: return "Manual";
+    }
+}
+
+uint8_t itemCount()
+{
+    switch (screen) {
+    case Screen::ModeList: return MODE_COUNT;
+    case Screen::VolumeList: return VOLUME_COUNT;
+    default: return TopCount;
+    }
+}
+
+// True once on the sample that completes a stable press (40 ms debounce).
+bool buttonPressed(Button& b)
+{
+    b.history = static_cast<uint8_t>((b.history << 1) | (digitalRead(b.pin) == LOW));
+    if ((b.history & 0x0F) == 0x0F && !b.down) {
+        b.down = true;
+        return true;
+    }
+    if ((b.history & 0x0F) == 0) b.down = false;
+    return false;
+}
+
+void sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy)
+{
+    UiCommandElement command{};
+    command.command = type;
+    command.volumePercent = volume;
+    command.mode = mode;
+    if (uiCmdQueue == nullptr || xQueueSend(uiCmdQueue, &command, 0) != pdPASS) {
+        DEBUG_PRINTLN("UITask: control command queue full");
+    }
+}
+
+void openList(Screen list, uint8_t selected)
+{
+    screen = list;
+    cursor = selected;
+    menuTop = 0;
+}
+
+void backToTop(TopItem item)
+{
+    screen = Screen::Top;
+    cursor = item;
+    menuTop = 0;
+}
+
+void activateItem()
+{
+    switch (screen) {
+    case Screen::ModeList:
+        sendCommand(UiCommandType::SetMode, 0, static_cast<PlayMode>(cursor));
+        backToTop(TopMode);
+        break;
+    case Screen::VolumeList:
+        volumePercent = cursor * VOLUME_STEP;
+        sendCommand(UiCommandType::SetVolume, volumePercent);
+        backToTop(TopVolume);
+        break;
+    default:
+        switch (cursor) {
+        case TopMode:
+            openList(Screen::ModeList, static_cast<uint8_t>(playMode));
+            break;
+        case TopPlay:
+            if (audioState == AudioState::Playing) sendCommand(UiCommandType::Pause);
+            else if (audioState == AudioState::Paused) sendCommand(UiCommandType::Resume);
+            break;
+        case TopStop:
+            sendCommand(UiCommandType::Stop);
+            break;
+        case TopVolume:
+            openList(Screen::VolumeList, volumePercent / VOLUME_STEP);
+            break;
+        }
+        break;
+    }
+}
+
+void applyUpdate(const UiUpdateElement& update)
+{
+    switch (update.type) {
+    case UiUpdateType::Ble:
+        bleConnected = update.bleConnected != 0;
+        break;
+    case UiUpdateType::Sensor:
+        havePpg = true;
+        heartRate = update.heartRateBpm;
+        spo2 = update.spo2;
+        ppgStatus = update.sensorStatus;
+        break;
+    case UiUpdateType::GSensor:
+        haveGSensor = true;
+        for (uint8_t i = 0; i < 3; i++) acc[i] = update.acc[i];
+        break;
+    case UiUpdateType::Mode:
+        playMode = static_cast<PlayMode>(update.mode);
+        break;
+    case UiUpdateType::Audio:
+        audioState = static_cast<AudioState>(update.audioState);
+        if (update.filename[0] != '\0') {
+            memcpy(nowPlaying, update.filename, sizeof(nowPlaying));
+            nowPlaying[sizeof(nowPlaying) - 1] = '\0';
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void itemLabel(uint8_t item, char* out, size_t size)
+{
+    switch (screen) {
+    case Screen::ModeList:
+        snprintf(out, size, "%s mode%s", modeName(static_cast<PlayMode>(item)),
+                 item == static_cast<uint8_t>(playMode) ? " *" : "");
+        return;
+    case Screen::VolumeList:
+        snprintf(out, size, "Volume %u%%%s", item * VOLUME_STEP,
+                 item * VOLUME_STEP == volumePercent ? " *" : "");
+        return;
+    default:
+        break;
+    }
+
+    switch (item) {
+    case TopMode:
+        snprintf(out, size, "Mode: %s", modeName(playMode));
+        break;
+    case TopPlay:
+        snprintf(out, size, "%s",
+                 audioState == AudioState::Playing ? "Pause"
+                 : audioState == AudioState::Paused ? "Resume" : "Stopped");
+        break;
+    case TopStop:
+        snprintf(out, size, "Stop");
+        break;
+    case TopVolume:
+        snprintf(out, size, "Volume: %u%%", volumePercent);
+        break;
+    default:
+        out[0] = '\0';
+        break;
+    }
+}
+
+void draw()
+{
+    char line[24];
+    const uint8_t count = itemCount();
+
+    if (cursor < menuTop) menuTop = cursor;
+    if (cursor >= menuTop + MENU_ROWS) menuTop = cursor - MENU_ROWS + 1;
+
+    oled.clearDisplay();
+    oled.setTextSize(1);
+    oled.setTextColor(1);
+    oled.setCursor(0, HEADER_Y);
+    if (audioState == AudioState::Stopped) {
+        oled.print("Stopped");
+    } else {
+        snprintf(line, sizeof(line), "%s %.18s",
+                 audioState == AudioState::Playing ? ">" : "||", nowPlaying);
+        oled.print(line);
+    }
+    oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
+
+    for (uint8_t row = 0; row < MENU_ROWS; row++) {
+        const uint8_t item = menuTop + row;
+        if (item >= count) break;
+        const int16_t y = MENU_Y + row * 8;
+        const bool selected = item == cursor;
+        if (selected) oled.fillRect(0, y, OledSh1106::WIDTH, 8, 1);
+        oled.setTextColor(selected ? 0 : 1);
+        itemLabel(item, line, sizeof(line));
+        oled.setCursor(2, y);
+        oled.print(line);
+        // Scroll hints on the right edge.
+        if (row == 0 && menuTop > 0) {
+            oled.setCursor(120, y);
+            oled.print('^');
+        } else if (row == MENU_ROWS - 1 && item + 1 < count) {
+            oled.setCursor(120, y);
+            oled.print('v');
+        }
+    }
+
+    oled.setTextColor(1);
+    oled.drawFastHLine(0, DIVIDER_Y, OledSh1106::WIDTH, 1);
+
+    oled.setCursor(0, STATUS_Y[0]);
+    oled.print(bleConnected ? "BLE: Connected" : "BLE: Searching...");
+
+    if (havePpg) snprintf(line, sizeof(line), "HR:%u SpO2:%u St:%u", heartRate, spo2, ppgStatus);
+    else snprintf(line, sizeof(line), "HR:-- SpO2:-- St:-");
+    oled.setCursor(0, STATUS_Y[1]);
+    oled.print(line);
+
+    if (haveGSensor) snprintf(line, sizeof(line), "A:%d,%d,%d", acc[0], acc[1], acc[2]);
+    else snprintf(line, sizeof(line), "A:--,--,--");
+    oled.setCursor(0, STATUS_Y[2]);
+    oled.print(line);
+
+    if ((uint32_t)(millis() - lastRefreshMs) >= REFRESH_MS) {
+        oled.refresh();
+        lastRefreshMs = millis();
+    } else {
+        oled.display();
+    }
+}
+
+} // namespace
+
 void UITask(void* parameter) {
-	// 任务逻辑
-	while (true) {
-		vTaskDelay(100 / portTICK_PERIOD_MS); // 延时以降低CPU占用
-	}
+    (void)parameter;
+
+    for (Button& b : buttons) pinMode(b.pin, INPUT_PULLUP);
+
+    if (!oled.begin()) {
+        DEBUG_PRINTLN("UITask: OLED (SH1106) not found on Wire, UI disabled");
+        vTaskDelete(nullptr);
+    }
+    DEBUG_PRINTLN("UITask: OLED initialized");
+
+    bool dirty = true;
+    uint32_t lastDrawMs = 0;
+    for (;;) {
+        if (buttonPressed(buttons[0])) {
+            cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
+            dirty = true;
+        }
+        if (buttonPressed(buttons[1])) {
+            cursor = cursor + 1 >= itemCount() ? 0 : cursor + 1;
+            dirty = true;
+        }
+        if (buttonPressed(buttons[2])) {
+            activateItem();
+            dirty = true;
+        }
+
+        UiUpdateElement update{};
+        while (uiUpdateQueue != nullptr &&
+               xQueueReceive(uiUpdateQueue, &update, 0) == pdPASS) {
+            applyUpdate(update);
+            dirty = true;
+        }
+
+        const uint32_t now = millis();
+        if ((uint32_t)(now - lastRefreshMs) >= REFRESH_MS) dirty = true;
+        if (dirty &&(uint32_t)(now - lastDrawMs) >= REDRAW_MS) {
+            draw();
+            dirty = false;
+            lastDrawMs = millis();
+        }
+        vTaskDelay(pdMS_TO_TICKS(POLL_MS));
+    }
 }

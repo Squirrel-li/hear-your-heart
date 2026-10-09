@@ -7,6 +7,7 @@
 namespace {
 
 bool automaticMode = true;
+PlayMode playMode = PlayMode::Enjoy;
 bool haveTargetBpm = false;
 uint16_t targetBpm = 0;
 uint8_t activeZone = 0;
@@ -16,6 +17,23 @@ uint16_t failedSongMask = 0;
 bool initialSelectionAttempted = false;
 bool pendingAutoPlay = false;
 bool pendingAfterFinish = false;
+
+void reportMode()
+{
+    if (uiUpdateQueue == nullptr) return;
+    UiUpdateElement update{};
+    update.type = UiUpdateType::Mode;
+    update.timestampMs = millis();
+    update.mode = static_cast<uint8_t>(playMode);
+    xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+}
+
+void setPlayMode(PlayMode mode)
+{
+    playMode = mode;
+    automaticMode = mode != PlayMode::Manual;
+    reportMode();
+}
 
 bool sendAudioCommand(const AudioCmdElement& command)
 {
@@ -115,7 +133,7 @@ void handlePlaybackEvent(const AudioPlaybackEvent& event)
 
 void enterManualMode()
 {
-    automaticMode = false;
+    setPlayMode(PlayMode::Manual);
     automaticSongActive = false;
     pendingAutoPlay = false;
 }
@@ -128,6 +146,54 @@ void sendManualCommand(AudioCmdElement& command)
     }
 }
 
+void enableAutomaticMode(PlayMode mode)
+{
+    setPlayMode(mode);
+    failedSongMask = 0;
+    initialSelectionAttempted = false;
+    if (haveTargetBpm) {
+        initialSelectionAttempted = true;
+        selectSongForTarget(false);
+    } else {
+        DEBUG_PRINTLN("Automatic mode enabled; waiting for valid heart rate");
+    }
+}
+
+void handleUiCommand(const UiCommandElement& cmd)
+{
+    AudioCmdElement command{};
+    switch (cmd.command) {
+    case UiCommandType::SetMode:
+        if (cmd.mode == PlayMode::Manual) {
+            if (automaticMode) enterManualMode();
+        } else if (automaticMode) {
+            setPlayMode(cmd.mode);  // Enjoy <-> Train keeps the current song
+        } else {
+            enableAutomaticMode(cmd.mode);
+        }
+        break;
+    case UiCommandType::Pause:
+        command.command = AudioCommandType::Pause;
+        sendManualCommand(command);
+        break;
+    case UiCommandType::Resume:
+        command.command = AudioCommandType::Resume;
+        sendManualCommand(command);
+        break;
+    case UiCommandType::Stop:
+        command.command = AudioCommandType::Stop;
+        sendManualCommand(command);
+        break;
+    case UiCommandType::SetVolume:
+        command.command = AudioCommandType::SetVolume;
+        command.volumePercent = cmd.volumePercent > 100 ? 100 : cmd.volumePercent;
+        if (!sendAudioCommand(command)) {
+            DEBUG_PRINTLN("Audio queue full; volume command was not sent");
+        }
+        break;
+    }
+}
+
 void handleSerialCommand(String input)
 {
     input.trim();
@@ -135,15 +201,7 @@ void handleSerialCommand(String input)
 
     AudioCmdElement command{};
     if (input.equalsIgnoreCase("auto")) {
-        automaticMode = true;
-        failedSongMask = 0;
-        initialSelectionAttempted = false;
-        if (haveTargetBpm) {
-            initialSelectionAttempted = true;
-            selectSongForTarget(false);
-        } else {
-            DEBUG_PRINTLN("Automatic mode enabled; waiting for valid heart rate");
-        }
+        enableAutomaticMode(PlayMode::Enjoy);
     } else if (input.startsWith("play ")) {
         String filename = input.substring(5);
         filename.trim();
@@ -184,6 +242,7 @@ void controlTask(void* parameter)
 {
     (void)parameter;
 
+    reportMode();
     for (;;) {
         TargetBpmResult result{};
         while (targetBpmResultQueue != nullptr &&
@@ -203,6 +262,14 @@ void controlTask(void* parameter)
             DEBUG_PRINT(" songIndex=");
             DEBUG_PRINTLN(static_cast<int>(event.songIndex));
             handlePlaybackEvent(event);
+        }
+
+        UiCommandElement uiCommand{};
+        while (uiCmdQueue != nullptr &&
+               xQueueReceive(uiCmdQueue, &uiCommand, 0) == pdPASS) {
+            DEBUG_PRINT("UITask -> controlTask [recv]: menu command=");
+            DEBUG_PRINTLN(static_cast<int>(uiCommand.command));
+            handleUiCommand(uiCommand);
         }
 
         if (Serial.available()) {

@@ -8,8 +8,9 @@ bool appQueuesInit()
     targetBpmResultQueue = xQueueCreate(1, sizeof(TargetBpmResult));
     audioCmdQueue   = xQueueCreate(8, sizeof(AudioCmdElement));
     audioPlaybackEventQueue = xQueueCreate(8, sizeof(AudioPlaybackEvent));
-    uiUpdateQueue   = xQueueCreate(8, sizeof(UiUpdateElement));
+    uiUpdateQueue   = xQueueCreate(16, sizeof(UiUpdateElement));
     bleTxQueue      = xQueueCreate(8, sizeof(ControlCmdElement));
+    uiCmdQueue      = xQueueCreate(4, sizeof(UiCommandElement));
 
     return bleRxFrameQueue &&
            ppgSensorQueue &&
@@ -18,5 +19,6 @@ bool appQueuesInit()
            audioCmdQueue &&
            audioPlaybackEventQueue &&
            uiUpdateQueue &&
-           bleTxQueue;
+           bleTxQueue &&
+           uiCmdQueue;
 }
