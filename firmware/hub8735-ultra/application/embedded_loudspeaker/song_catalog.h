@@ -8,13 +8,33 @@ struct Song {
     uint16_t bpm;
 };
 
-// Offline onset/autocorrelation estimates from testdata/audio. Replace these
-// values after measuring any different MP3 files copied to the SD card.
+// The files are in testdata/sd_music; copy them all to the SD card root. Each file is
+// named bpmNNN.mp3 after its BPM (8.3-safe); keep the list sorted by BPM.
+// Rows marked (local) come from testdata/audio with offline onset/autocorrelation
+// estimates. Rows marked (FMA) are 30 s clips from the Free Music Archive dataset
+// (fma_small, CC BY-NC-SA, non-commercial); their BPM is the rounded Echonest tempo
+// from fma_metadata, not measured here, so it may be a half/double-tempo misreading.
+// 60-180 BPM is within 5% of some song, except 70-71, 90 and 124-125, where the
+// closest-BPM rule applies. Replace the values after measuring any different MP3 files
+// copied to the SD card.
+// ponytail: A 16-bit unavailable mask limits this list to 16 songs; widen it to add more.
 static const Song songs[] = {
-    {"music1.mp3", 75}, {"music2.mp3", 95}, {"music3.mp3", 80},
-    {"music4.mp3", 85}, {"music5.mp3", 137}, {"music6.mp3", 97},
-    {"music7.mp3", 135}, {"music8.mp3", 147}, {"music9.mp3", 138},
-    {"music10.mp3", 132},
+    {"bpm060.mp3", 60},   // (FMA) Ai Aso, Folk
+    {"bpm066.mp3", 66},   // (FMA) Frau, Pop
+    {"bpm075.mp3", 75},   // (local) "Embrace", Sappheiros
+    {"bpm080.mp3", 80},   // (local) "Dragon Castle", Makai Symphony
+    {"bpm085.mp3", 85},   // (local) "Way Home", Tokyo Music Walker
+    {"bpm095.mp3", 95},   // (local) "Filaments", Scott Buckley
+    {"bpm097.mp3", 97},   // (local) "The Epic Hero", Keys Of Moon
+    {"bpm106.mp3", 106},  // (FMA) KenLo Craqnuques, Hip-Hop
+    {"bpm117.mp3", 117},  // (FMA) Gosprom, Pop
+    {"bpm132.mp3", 132},  // (local) "The Travelling Symphony", Savfk
+    {"bpm135.mp3", 135},  // (local) "Dawn", Sappheiros
+    {"bpm137.mp3", 137},  // (local) "Indian Fusion", Shahed
+    {"bpm138.mp3", 138},  // (local) "Fire And Thunder", Cjbeards
+    {"bpm147.mp3", 147},  // (local) "The Grid", Savfk
+    {"bpm156.mp3", 156},  // (FMA) So Cow, Pop
+    {"bpm171.mp3", 171},  // (FMA) The Sounds of Taraab, International
 };
 
 static const int songCount = sizeof(songs) / sizeof(songs[0]);
@@ -84,15 +104,19 @@ static int songAfterFinish(uint16_t targetBpm, int currentSong,
 #include <assert.h>
 int main(void)
 {
-    assert(nextMatchingSong(135, -1) == 4);
-    assert(nextMatchingSong(135, 4) == 6);
-    assert(nextMatchingSong(135, 8) == 9);
+    assert(nextMatchingSong(135, -1) == 9);
+    assert(nextMatchingSong(135, 9) == 10);
+    assert(nextMatchingSong(135, 10) == 11);
+    assert(nextMatchingSong(135, 12) == 9);
     assert(nextMatchingSong(70, -1) == -1);
-    assert(closestSong(70, -1) == 0);
+    assert(closestSong(70, -1) == 1);
     assert(closestSong(0, -1) == -1);
-    assert(songForStart(70, -1) == 0);
+    assert(songForStart(70, -1) == 1);
+    assert(nextMatchingSong(60, -1) == 0);
+    assert(nextMatchingSong(117, -1) == 8);
+    assert(nextMatchingSong(171, -1) == 15);
     assert(songAfterFinish(70, 4) == 4);
-    assert(songAfterFinish(135, 4) == 6);
+    assert(songAfterFinish(135, 4) == 9);
     return 0;
 }
 #endif
