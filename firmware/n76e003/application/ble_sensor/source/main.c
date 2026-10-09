@@ -4,8 +4,12 @@
 /*  Wiring (same as application\UART1 test)                                                               */
 /*    N76E003 P1.6 TXD_1  ->  BM7701 pin 22 UART1_RX                                                       */
 /*    N76E003 P0.2 RXD_1  <-  BM7701 pin 23 UART1_TX                                                       */
-/*    N76E003 P1.3        ->  BM7701 pin 6  RST_N  (active low)                                            */
+/*    N76E003 P1.5        ->  BM7701 pin 6  RST_N  (active low)                                            */
 /*    3.3 V, common GND                                                                                    */
+/*                                                                                                         */
+/*  OLED  SH1106 128x64 (1.3") on I2C0, 8-bit address 0x78 (7-bit 0x3C), polled master, ~296 kHz                 */
+/*    N76E003 P1.3 SCL, P1.4 SDA (open-drain, the OLED module provides the pull-ups)                       */
+/*    shows BLE name / link state / PPG values; one text row is refreshed per OLED_ROW_MS                  */
 /*                                                                                                         */
 /*  PPG  BMH08002-4 / BMH83M002 (oximeter module) on UART0, 38400 8N1                                      */
 /*    N76E003 P0.6 TXD    ->  PPG RX                                                                       */
@@ -58,6 +62,7 @@
 /*  Only common.c is needed from the BSP library (BIT_TMP used by the SFR page macros).                 */
 /*---------------------------------------------------------------------------------------------------------*/
 #include "numicro_8051.h"
+#include "oled_font.h"
 
 /*============================== configuration ==============================*/
 #define BM_BAUD             115200
@@ -85,9 +90,17 @@
                                     /* (EEPROM 0x01 mode 0x00/01/04/05/06/07). In ask-response     */
                                     /* mode (0x02/03) it does not send 55 B0 frames by itself.     */
 
+#define USE_OLED            1       /* 0 = skip the OLED (to rule it out when debugging)      */
+#define OLED_ADDR           0x78    /* 8-bit I2C address                                     */
+#define OLED_I2CLK          13      /* I2C clock = Fsys / (4 * (13 + 1)) ~ 296 kHz           */
+#define OLED_TMO_MS         5       /* I2C SI wait limit (bus stuck / no pull-up)            */
+#define OLED_ROW_MS         20      /* one text row is refreshed per period (8 rows)         */
+#define OLED_RETRY_MS       1000    /* retry init when the OLED did not answer               */
+#define PPG_LOST_MS         1500    /* no PPG sample for this long -> NO SIGNAL              */
+
 /* BM7701 reset pin */
-#define BM_RST              P13
-#define BM_RST_INIT()       P13_PUSHPULL_MODE
+#define BM_RST              P15
+#define BM_RST_INIT()       P15_PUSHPULL_MODE
 
 /* Status LED on P1.2 (1 = on). Blink rate shows the state:                */
 /*   init, nothing received on P0.2 yet       10 Hz   (50 ms on / 50 ms off)    */
@@ -594,6 +607,269 @@ static void ppg_send(void)
     ppg_ready = 0;
 }
 
+/*============================== SH1106 OLED (I2C0, polled) ================*/
+/* 21 text columns x 8 rows (6x8 cell). Each row is built as text, compared with the */
+/* text already on screen and only sent when it changed (about 4 ms per row).        */
+#define OLED_COLS           21
+#define OLED_ROWS           8
+
+__xdata UINT8 disp[PKT_LEN];                /* last complete PPG sample, same layout as tx_pkt */
+UINT16 disp_t   = 0;
+__bit  disp_ok;                             /* a sample has been received            */
+__bit  ppg_ok;                              /* ... and it is recent                  */
+
+__xdata char ln[OLED_COLS + 1];             /* row being built                       */
+__xdata char ln_cache[OLED_ROWS][OLED_COLS];/* text currently on the screen          */
+UINT8  ln_n;
+__xdata char ln_dig[5];
+UINT8  oled_row  = 0;
+UINT16 t_oled    = 0;
+__bit  oled_ok;
+
+static __bit i2c_wait(void)
+{
+    UINT16 t0 = now_ms();
+    while (!SI)
+        if ((UINT16)(now_ms() - t0) > OLED_TMO_MS) return 0;
+    return 1;
+}
+
+static __bit i2c_start(void)
+{
+    STA = 1;
+    SI  = 0;
+    if (!i2c_wait()) return 0;
+    return I2STAT == 0x08;
+}
+
+static __bit i2c_tx(UINT8 b, UINT8 ack_status)   /* 0x18 after SLA+W, 0x28 after data */
+{
+    I2DAT = b;
+    STA = 0;
+    SI  = 0;
+    if (!i2c_wait()) return 0;
+    return I2STAT == ack_status;
+}
+
+static void i2c_stop(void)
+{
+    UINT16 t0 = now_ms();
+    STO = 1;
+    SI  = 0;
+    while (STO)
+        if ((UINT16)(now_ms() - t0) > OLED_TMO_MS)
+        {
+            I2CEN = 0;                      /* bus stuck: reset the I2C block */
+            I2CEN = 1;
+            break;
+        }
+}
+
+static __bit oled_begin(UINT8 ctrl)                /* ctrl 0x00 = commands, 0x40 = data */
+{
+    return i2c_start() && i2c_tx(OLED_ADDR, 0x18) && i2c_tx(ctrl, 0x28);
+}
+
+__code const UINT8 oled_init_seq[] = {     /* SH1106: page addressing only, no 0x20 / 0x21 / 0x22 / 0x8D */
+    0xAE,               /* display off                        */
+    0xD5, 0x80,         /* clock                              */
+    0xA8, 0x3F,         /* 64 rows                            */
+    0xD3, 0x00,         /* no offset                          */
+    0x40,               /* start line 0                       */
+    0xAD, 0x8B,         /* internal DC-DC on                  */
+    0xA1, 0xC8,         /* segment / COM remap (not flipped)  */
+    0xDA, 0x12,         /* COM pins                           */
+    0x81, 0xCF,         /* contrast                           */
+    0xD9, 0xF1,         /* pre-charge                         */
+    0xDB, 0x40,         /* VCOMH                              */
+    0xA4, 0xA6,         /* follow RAM, normal                 */
+    0xAF                /* display on                         */
+};
+
+static __bit oled_row_draw(UINT8 row)
+{
+    UINT8 i, j, c;
+    UINT16 g;
+    /* page = row, column pointer 2 (the SH1106 RAM is 132 wide, the panel shows columns 2..129) */
+    if (!(oled_begin(0x00) && i2c_tx(0xB0 + row, 0x28) && i2c_tx(0x02, 0x28) && i2c_tx(0x10, 0x28)))
+    {
+        i2c_stop();
+        return 0;
+    }
+    i2c_stop();
+    if (!oled_begin(0x40)) { i2c_stop(); return 0; }
+    for (i = 0; i < OLED_COLS; i++)
+    {
+        c = (UINT8)ln[i];
+        if (c < FONT_FIRST || c > FONT_LAST) c = ' ';
+        g = (UINT16)(c - FONT_FIRST) * 5;
+        for (j = 0; j < 5; j++)
+            if (!i2c_tx(font5x7[g + j], 0x28)) { i2c_stop(); return 0; }
+        if (!i2c_tx(0x00, 0x28)) { i2c_stop(); return 0; }   /* 1 column gap */
+    }
+    if (!(i2c_tx(0x00, 0x28) && i2c_tx(0x00, 0x28))) { i2c_stop(); return 0; }   /* 21*6 + 2 = 128 */
+    i2c_stop();
+    return 1;
+}
+
+static void oled_hw_init(void)
+{
+    UINT8 i, j;
+    P13_OPENDRAIN_MODE;                     /* SCL */
+    P14_OPENDRAIN_MODE;                     /* SDA */
+    I2CPX = 0;                              /* I2C0 on P1.3 / P1.4 */
+    I2CLK = OLED_I2CLK;
+    I2CEN = 0;
+    I2CEN = 1;
+
+    oled_ok = 0;
+    if (!oled_begin(0x00)) { i2c_stop(); return; }          /* no ACK: no OLED / bus problem */
+    for (i = 0; i < sizeof(oled_init_seq); i++)
+        if (!i2c_tx(oled_init_seq[i], 0x28)) { i2c_stop(); return; }
+    i2c_stop();
+
+    for (i = 0; i < OLED_COLS; i++) ln[i] = ' ';            /* clear the screen */
+    for (j = 0; j < OLED_ROWS; j++)
+    {
+        if (!oled_row_draw(j)) return;
+        for (i = 0; i < OLED_COLS; i++) ln_cache[j][i] = ' ';
+    }
+    oled_ok = 1;
+}
+
+static void ln_c(char c)
+{
+    if (ln_n < OLED_COLS) ln[ln_n++] = c;
+}
+
+static void ln_s(__code const char *s)
+{
+    while (*s) ln_c(*s++);
+}
+
+static void ln_u(UINT16 v, UINT8 w)         /* right-aligned decimal, dashes when there is no sample */
+{
+    UINT8 i = 0;
+    if (!ppg_ok)
+    {
+        while (w--) ln_c('-');
+        return;
+    }
+    do { ln_dig[i++] = '0' + (UINT8)(v % 10); v /= 10; } while (v);
+    while (w > i) { ln_c(' '); w--; }
+    while (i) ln_c(ln_dig[--i]);
+}
+
+static void ln_2d(UINT8 v)                  /* two digits, zero padded */
+{
+    ln_c('0' + v / 10);
+    ln_c('0' + v % 10);
+}
+
+static void ln_time(UINT32 ms)              /* "mmMssS" since power-up, minutes wrap at 100 (there is no RTC) */
+{
+    UINT32 sec = ms / 1000UL;
+    ln_2d((UINT8)((sec / 60UL) % 100UL));
+    ln_c('m');
+    ln_2d((UINT8)(sec % 60UL));
+    ln_c('s');
+}
+
+static UINT32 uptime_ms(void)
+{
+    UINT32 t;
+    clr_ET0;
+    t = ((UINT32)g_ms_hi << 16) | g_ms;
+    set_ET0;
+    return t;
+}
+
+static void oled_build(UINT8 row, UINT8 state)
+{
+    UINT8 st = disp[PKT_ST];
+    ln_n = 0;
+    switch (row)
+    {
+    case 0:
+        ln_s((__code const char *)bm_name);
+        ln_s(" BM:"); ln_s(g_frm_any ? "OK" : (g_rx_any ? "RX" : "--"));   /* -- nothing on P0.2, RX bytes but no valid frame */   /* BM7701 answers on UART1 */
+        break;
+    case 1:
+        ln_s("BLE:");
+        if      (state <= ST_FEATURE)     ln_s("INIT");
+        else if (state <= ST_WAIT_CONN)   ln_s("ADVERTISING");
+        else if (state == ST_WAIT_NOTIFY) ln_s("CONNECTED");
+        else if (state == ST_NOTIFY)      ln_s("STREAMING");
+        else                              ln_s("DISCONNECTED");
+        break;
+    case 2:
+        ln_s("UP  ");   ln_time(uptime_ms());
+        break;
+    case 3:
+        ln_s("PPG:");
+        if (!disp_ok)      ln_s("NO SIGNAL");
+        else
+        {
+            if (!ppg_ok)       ln_s("LOST");            /* time below = last sample */
+            else if (st == 0)  ln_s("FNG-OFF");
+            else if (st == 1)  ln_s("FNG-ON");
+            else if (st == 2)  ln_s("DATA");
+            else { ln_s("ST "); ln_u(st, 3); }
+            ln_s(" @");
+            ln_time(((UINT32)disp[0] << 24) | ((UINT32)disp[1] << 16) | ((UINT32)disp[2] << 8) | disp[3]);
+        }
+        break;
+    case 4:
+        ln_s("HR:");    ln_u(disp[PKT_ST + 2], 3);
+        ln_s(" SpO2:"); ln_u(disp[PKT_ST + 1], 3);
+        break;
+    case 5:
+        ln_s("bpi:");   ln_u(disp[PKT_ST + 3], 3);
+        ln_s(" hrv:");  ln_u(disp[PKT_ST + 4], 3);
+        break;
+    case 6:
+        ln_s("amp:");   ln_u(disp[PKT_ST + 5], 3);
+        ln_s(" sys:");  ln_u(disp[PKT_ST + 6], 3);
+        break;
+    default:
+        ln_s("P1:");  ln_u(((UINT16)disp[PKT_ST + 7] << 8) | disp[PKT_ST + 8], 5);
+        ln_s(" P2:"); ln_u(((UINT16)disp[PKT_ST + 9] << 8) | disp[PKT_ST + 10], 5);
+        break;
+    }
+    while (ln_n < OLED_COLS) ln[ln_n++] = ' ';
+}
+
+static void oled_task(UINT8 state)
+{
+    UINT8 i;
+    UINT16 t = now_ms();
+
+    if (!oled_ok)
+    {
+        if ((UINT16)(t - t_oled) >= OLED_RETRY_MS)
+        {
+            t_oled = t;
+            oled_hw_init();
+        }
+        return;
+    }
+    if ((UINT16)(t - t_oled) < OLED_ROW_MS) return;
+    t_oled = t;
+
+    ppg_ok = disp_ok && (UINT16)(t - disp_t) < PPG_LOST_MS;
+    oled_build(oled_row, state);
+    for (i = 0; i < OLED_COLS; i++)
+        if (ln[i] != ln_cache[oled_row][i]) break;
+    if (i < OLED_COLS)                                      /* changed */
+    {
+        if (oled_row_draw(oled_row))
+            for (i = 0; i < OLED_COLS; i++) ln_cache[oled_row][i] = ln[i];
+        else
+            oled_ok = 0;                                    /* re-init after OLED_RETRY_MS */
+    }
+    oled_row = (oled_row + 1) & (OLED_ROWS - 1);
+}
+
 /*============================== main =======================================*/
 void main(void)
 {
@@ -623,6 +899,7 @@ void main(void)
     set_EA;
 
     t_state = now_ms();
+    t_oled  = t_state - (OLED_RETRY_MS - 100);  /* OLED init ~100 ms after power-up */
 #if USE_LED
     t_led   = t_state;
     t_pkt   = t_state;
@@ -639,6 +916,15 @@ void main(void)
             g_notify = 0;
             state = ST_DISC_WAIT;
             t_state = t;
+        }
+
+        /* keep the last complete sample for the OLED (ppg_ready means tx_pkt is stable) */
+        if (ppg_ready)
+        {
+            UINT8 k;
+            for (k = 0; k < PKT_LEN; k++) disp[k] = tx_pkt[k];   /* incl. sensor_time_ms [0..3] */
+            disp_t  = t;
+            disp_ok = 1;
         }
 
         /* not streaming: drop the sample so the first frame after subscription is fresh */
@@ -827,6 +1113,10 @@ void main(void)
             fff2_new = 0;
             /* TODO: parse fff2_buf[0..fff2_len-1] (commands from phone) */
         }
+
+#if USE_OLED
+        oled_task(state);
+#endif
 
 #if USE_LED
         if (state == ST_NOTIFY)
