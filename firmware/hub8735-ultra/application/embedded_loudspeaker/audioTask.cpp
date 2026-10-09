@@ -33,6 +33,20 @@ void sendPlaybackEvent(AudioPlaybackEventType type, int8_t songIndex)
     }
 }
 
+// filename is only given when a new file starts; otherwise the UI keeps the last one.
+void reportAudioState(AudioState state, const char* filename = nullptr)
+{
+    if (uiUpdateQueue == nullptr) return;
+    UiUpdateElement update{};
+    update.type = UiUpdateType::Audio;
+    update.timestampMs = millis();
+    update.audioState = static_cast<uint8_t>(state);
+    if (filename != nullptr) {
+        strncpy(update.filename, filename, sizeof(update.filename) - 1);
+    }
+    xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+}
+
 void handleAudioCommand(AudioCmdElement& command)
 {
     command.filename[sizeof(command.filename) - 1] = '\0';
@@ -57,9 +71,11 @@ void handleAudioCommand(AudioCmdElement& command)
             currentAutomaticSongIndex = automatic ? command.songIndex : -1;
             DEBUG_PRINT("Audio started: ");
             DEBUG_PRINTLN(command.filename);
+            reportAudioState(AudioState::Playing, command.filename);
         } else {
             DEBUG_PRINT("Playback start failed: ");
             DEBUG_PRINTLN(amp.lastError());
+            reportAudioState(AudioState::Stopped);
             if (automatic) {
                 sendPlaybackEvent(AudioPlaybackEventType::Failed, command.songIndex);
             }
@@ -72,6 +88,7 @@ void handleAudioCommand(AudioCmdElement& command)
         currentAutomaticSongIndex = -1;
         amp.stopMp3();
         DEBUG_PRINTLN("Audio stopped");
+        reportAudioState(AudioState::Stopped);
         break;
 
     case AudioCommandType::SetVolume: {
@@ -88,6 +105,7 @@ void handleAudioCommand(AudioCmdElement& command)
         currentAutomaticSongIndex = -1;
         if (amp.pauseMp3()) {
             DEBUG_PRINTLN("Audio pause requested");
+            reportAudioState(AudioState::Paused);
         } else {
             DEBUG_PRINTLN("Audio pause ignored: no active playback");
         }
@@ -98,6 +116,7 @@ void handleAudioCommand(AudioCmdElement& command)
         currentAutomaticSongIndex = -1;
         if (amp.resumeMp3()) {
             DEBUG_PRINTLN("Audio resume requested");
+            reportAudioState(AudioState::Playing);
         } else {
             DEBUG_PRINTLN("Audio resume ignored: audio is not paused");
         }
@@ -125,7 +144,7 @@ void audioTask(void* parameter)
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
-    amp.setShutdownPin(10);
+    amp.setShutdownPin(2);  // D22 is the I2S MCLK pin claimed by amp.begin()
     amp.setVolume(0.5f);
     DEBUG_PRINTLN("MAX98357 initialized successfully");
 
@@ -160,6 +179,7 @@ void audioTask(void* parameter)
                 }
                 currentPlaybackAutomatic = false;
                 currentAutomaticSongIndex = -1;
+                reportAudioState(AudioState::Stopped);
             } else if (result == Mp3ProcessResult::Stopped) {
                 DEBUG_PRINTLN("Audio playback stopped");
             } else if (result == Mp3ProcessResult::Paused) {
@@ -175,6 +195,7 @@ void audioTask(void* parameter)
                 amp.stopMp3();
                 currentPlaybackAutomatic = false;
                 currentAutomaticSongIndex = -1;
+                reportAudioState(AudioState::Stopped);
             }
             vTaskDelay(pdMS_TO_TICKS(1));
         }

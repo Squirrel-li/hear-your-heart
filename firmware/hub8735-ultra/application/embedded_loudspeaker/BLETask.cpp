@@ -28,6 +28,14 @@ void clearRemoteHandles()
     Tx = nullptr;
 }
 
+// The display only needs the latest values, so a full queue just drops the update.
+void postUi(const UiUpdateElement& update)
+{
+    if (uiUpdateQueue != nullptr) {
+        xQueueSend(uiUpdateQueue, &update, 0);
+    }
+}
+
 bool sensorConnected()
 {
     return connID >= 0 && BLE.connected(connID);
@@ -184,6 +192,8 @@ void BLETask(void* parameter) {
 
     bool linkUp = connectSensor();
     uint32_t lastAttemptMs = millis();
+    uint32_t lastUiBleMs = 0;
+    bool lastUiBle = !linkUp;
 	while (true) {
         if (linkUp && !sensorConnected()) {
             linkUp = false;
@@ -202,6 +212,18 @@ void BLETask(void* parameter) {
                 DEBUG_PRINT(BLE_RETRY_DELAY_MS);
                 DEBUG_PRINTLN(" ms");
             }
+        }
+
+        // Resent every second so a dropped update cannot leave a stale link state on screen.
+        if (linkUp != lastUiBle ||
+            (uint32_t)(millis() - lastUiBleMs) >= 1000u) {
+            UiUpdateElement bleUpdate{};
+            bleUpdate.type = UiUpdateType::Ble;
+            bleUpdate.timestampMs = millis();
+            bleUpdate.bleConnected = linkUp ? 1 : 0;
+            postUi(bleUpdate);
+            lastUiBle = linkUp;
+            lastUiBleMs = millis();
         }
 
         BleFrameElement msgElement;
@@ -262,6 +284,13 @@ void BLETask(void* parameter) {
                 } else {
                     DEBUG_PRINTLN("BLETask -> analysisTask: PPG queue full");
                 }
+                UiUpdateElement ppgUpdate{};
+                ppgUpdate.type = UiUpdateType::Sensor;
+                ppgUpdate.timestampMs = ppgElement.hub_rx_time_ms;
+                ppgUpdate.heartRateBpm = ppgElement.heartRateBpm;
+                ppgUpdate.spo2 = ppgElement.SpO2;
+                ppgUpdate.sensorStatus = ppgElement.status;
+                postUi(ppgUpdate);
                 // DEBUG_PRINTLN("PPG sensor data received");
                 // DEBUG_PRINT("Status: ");
                 // DEBUG_PRINTLN(ppgElement.status);
@@ -302,6 +331,13 @@ void BLETask(void* parameter) {
                 } else {
                     DEBUG_PRINTLN("BLETask -> analysisTask: G sensor queue full");
                 }
+                UiUpdateElement gUpdate{};
+                gUpdate.type = UiUpdateType::GSensor;
+                gUpdate.timestampMs = gSensorElement.hub_rx_time_ms;
+                gUpdate.acc[0] = gSensorElement.acc_x;
+                gUpdate.acc[1] = gSensorElement.acc_y;
+                gUpdate.acc[2] = gSensorElement.acc_z;
+                postUi(gUpdate);
                 DEBUG_PRINTLN("G sensor data received");
                 DEBUG_PRINT("Acc X: ");
                 DEBUG_PRINTLN(gSensorElement.acc_x);

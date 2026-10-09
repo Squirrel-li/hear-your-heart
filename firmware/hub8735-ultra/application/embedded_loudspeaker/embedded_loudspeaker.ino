@@ -22,6 +22,7 @@ QueueHandle_t audioCmdQueue = nullptr;
 QueueHandle_t audioPlaybackEventQueue = nullptr;
 QueueHandle_t uiUpdateQueue = nullptr;
 QueueHandle_t bleTxQueue = nullptr;
+QueueHandle_t uiCmdQueue = nullptr;
 
 UserInfo userInfo;
 
@@ -37,17 +38,12 @@ void setup()
     #endif
     DEBUG_PRINTLN("Starting embedded loudspeaker application");
     
-    Serial2.begin(38400);
-    DEBUG_PRINTLN("Initializing PPG sensor serial port");
+    // Serial2 TX is pin 8, which UITask uses as a menu button; PPG data now comes over BLE.
 
     userInfo.age = 25;
     userInfo.weight = 70.5;
     userInfo.height = 175.0;
     
-    // UI
-    // 初始化UI
-    // TODO: 初始化UI
-
     // 初始化應用程式佇列
     if (!appQueuesInit()) {
         DEBUG_PRINTLN("Failed to initialize app queues");
@@ -71,7 +67,7 @@ void setup()
         DEBUG_PRINTLN("audio task create failed");
         while(1);
     }
-    if (xTaskCreate(UITask, "UI", 1024, nullptr, 2, &UITaskHandle) != pdPASS) {
+    if (xTaskCreate(UITask, "UI", 2048, nullptr, 2, &UITaskHandle) != pdPASS) {
         DEBUG_PRINTLN("UI task create failed");
         while(1);
     }

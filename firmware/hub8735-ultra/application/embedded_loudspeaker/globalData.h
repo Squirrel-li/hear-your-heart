@@ -18,6 +18,7 @@ extern QueueHandle_t targetBpmResultQueue;	// Latest analysis result for control
 extern QueueHandle_t audioCmdQueue;		// Audio command queue
 extern QueueHandle_t audioPlaybackEventQueue;	// Playback events for controlTask
 extern QueueHandle_t uiUpdateQueue;		// UI update queue
+extern QueueHandle_t uiCmdQueue;		// Menu commands from UITask to controlTask
 extern QueueHandle_t bleTxQueue;		// BLE transmission queue
 
 bool appQueuesInit();
@@ -120,9 +121,27 @@ enum class UiUpdateType : uint8_t {
     Analysis,
     Audio,
     Ble,
-    Error
+    Error,
+    GSensor,
+    Mode
 };
 
+// Enjoy and Train are both automatic (heart-rate driven) selection for now.
+// ponytail: Train currently behaves exactly like Enjoy; give it its own rules when defined.
+enum class PlayMode : uint8_t {
+    Enjoy,
+    Train,
+    Manual
+};
+
+enum class AudioState : uint8_t {
+    Stopped,
+    Playing,
+    Paused
+};
+
+// Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleConnected; GSensor: acc;
+// Audio: audioState and, when a new file starts, filename; Mode: mode
 struct UiUpdateElement {
     UiUpdateType type;
     uint32_t timestampMs;
@@ -130,7 +149,28 @@ struct UiUpdateElement {
     uint8_t activityLevel;
     uint8_t volumePercent;
     uint8_t isPlaying;
+    uint8_t spo2;
+    uint8_t sensorStatus;
+    uint8_t bleConnected;
+    uint8_t mode;        // PlayMode
+    uint8_t audioState;  // AudioState
+    int16_t acc[3];
     char filename[AUDIO_FILENAME_MAX];
+};
+
+// Menu command from UITask; controlTask applies the manual-control rules.
+enum class UiCommandType : uint8_t {
+    SetMode,
+    Pause,
+    Resume,
+    Stop,
+    SetVolume
+};
+
+struct UiCommandElement {
+    UiCommandType command;
+    uint8_t volumePercent;
+    PlayMode mode;
 };
 
 // Log 資料
