@@ -1,4 +1,5 @@
 #include "audioTask.h"
+#include "music_library.h"
 
 #include <cstring>
 
@@ -137,6 +138,7 @@ void audioTask(void* parameter)
         }
     }
     DEBUG_PRINTLN("SD card initialized successfully");
+    musicLibraryLoad(fs);  // 缺檔或格式錯誤只記錄；目前選曲仍使用 song_catalog.h
 
     if (!amp.begin()) {
         DEBUG_PRINTLN("MAX98357 initialization failed");

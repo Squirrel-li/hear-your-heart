@@ -79,6 +79,7 @@ uint8_t spo2 = 0;
 uint8_t ppgStatus = 0;
 bool haveGSensor = false;
 int16_t acc[3] = {0, 0, 0};
+int16_t gyro[3] = {0, 0, 0};
 
 const char* modeName(PlayMode mode)
 {
@@ -143,8 +144,6 @@ void activateItem()
         backToTop(TopMode);
         break;
     case Screen::VolumeList:
-        volumePercent = cursor * VOLUME_STEP;
-        sendCommand(UiCommandType::SetVolume, volumePercent);
         backToTop(TopVolume);
         break;
     default:
@@ -160,7 +159,7 @@ void activateItem()
             sendCommand(UiCommandType::Stop);
             break;
         case TopVolume:
-            openList(Screen::VolumeList, volumePercent / VOLUME_STEP);
+            openList(Screen::VolumeList, 0);
             break;
         }
         break;
@@ -181,7 +180,10 @@ void applyUpdate(const UiUpdateElement& update)
         break;
     case UiUpdateType::GSensor:
         haveGSensor = true;
-        for (uint8_t i = 0; i < 3; i++) acc[i] = update.acc[i];
+        for (uint8_t i = 0; i < 3; i++) {
+            acc[i] = update.acc[i];
+            gyro[i] = update.gyro[i];
+        }
         break;
     case UiUpdateType::Mode:
         playMode = static_cast<PlayMode>(update.mode);
@@ -234,9 +236,16 @@ void itemLabel(uint8_t item, char* out, size_t size)
     }
 }
 
+// The board has no RTC/NTP, so the time shown is sys_ms since boot (millis()),
+// same "mmMssS" format as the BM7701 sensor OLED. Minutes wrap at 100.
+uint32_t clockSeconds()
+{
+    return millis() / 1000;
+}
+
 void draw()
 {
-    char line[24];
+    char line[48];
     const uint8_t count = itemCount();
 
     if (cursor < menuTop) menuTop = cursor;
@@ -244,6 +253,7 @@ void draw()
 
     oled.clearDisplay();
     oled.setTextSize(1);
+    const bool volumeBar = screen == Screen::VolumeList;
     oled.setTextColor(1);
     oled.setCursor(0, HEADER_Y);
     if (audioState == AudioState::Stopped) {
@@ -255,7 +265,17 @@ void draw()
     }
     oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
 
-    for (uint8_t row = 0; row < MENU_ROWS; row++) {
+    if (volumeBar) {
+        // Horizontal bar filling from the left; Up/Down adjust, OK leaves.
+        snprintf(line, sizeof(line), "Volume %u%%", volumePercent);
+        oled.setCursor(2, MENU_Y + 2);
+        oled.print(line);
+        constexpr int16_t BAR_W = OledSh1106::WIDTH - 4;
+        oled.drawRect(2, MENU_Y + 14, BAR_W, 12, 1);
+        oled.fillRect(4, MENU_Y + 16, (BAR_W - 4) * volumePercent / 100, 8, 1);
+    }
+
+    for (uint8_t row = 0; row < MENU_ROWS && !volumeBar; row++) {
         const uint8_t item = menuTop + row;
         if (item >= count) break;
         const int16_t y = MENU_Y + row * 8;
@@ -279,15 +299,23 @@ void draw()
     oled.drawFastHLine(0, DIVIDER_Y, OledSh1106::WIDTH, 1);
 
     oled.setCursor(0, STATUS_Y[0]);
-    oled.print(bleConnected ? "BLE: Connected" : "BLE: Searching...");
+    const uint32_t sec = clockSeconds();
+    snprintf(line, sizeof(line), "BLE:%s %02u:%02u", bleConnected ? "Conn" : "Scan",
+             (unsigned)(sec / 60 % 100), (unsigned)(sec % 60));
+    oled.print(line);
 
     if (havePpg) snprintf(line, sizeof(line), "HR:%u SpO2:%u St:%u", heartRate, spo2, ppgStatus);
     else snprintf(line, sizeof(line), "HR:-- SpO2:-- St:-");
     oled.setCursor(0, STATUS_Y[1]);
     oled.print(line);
 
-    if (haveGSensor) snprintf(line, sizeof(line), "A:%d,%d,%d", acc[0], acc[1], acc[2]);
-    else snprintf(line, sizeof(line), "A:--,--,--");
+    // 128 px / 6 px = 21 columns: A:--,--,-- G:--,--,-- fits, real values may clip.
+    if (haveGSensor) {
+        snprintf(line, sizeof(line), "A:%d,%d,%d G:%d,%d,%d",
+                 acc[0], acc[1], acc[2], gyro[0], gyro[1], gyro[2]);
+    } else {
+        snprintf(line, sizeof(line), "A:--,--,-- G:--,--,--");
+    }
     oled.setCursor(0, STATUS_Y[2]);
     oled.print(line);
 
@@ -314,14 +342,30 @@ void UITask(void* parameter) {
 
     bool dirty = true;
     uint32_t lastDrawMs = 0;
+    uint32_t lastClockSec = clockSeconds();
     for (;;) {
-        if (buttonPressed(buttons[0])) {
-            cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
-            dirty = true;
-        }
-        if (buttonPressed(buttons[1])) {
-            cursor = cursor + 1 >= itemCount() ? 0 : cursor + 1;
-            dirty = true;
+        const bool upPressed = buttonPressed(buttons[0]);
+        const bool downPressed = buttonPressed(buttons[1]);
+        if (screen == Screen::VolumeList) {
+            if (upPressed && volumePercent < 100) {
+                volumePercent += VOLUME_STEP;
+                sendCommand(UiCommandType::SetVolume, volumePercent);
+                dirty = true;
+            }
+            if (downPressed && volumePercent > 0) {
+                volumePercent -= VOLUME_STEP;
+                sendCommand(UiCommandType::SetVolume, volumePercent);
+                dirty = true;
+            }
+        } else {
+            if (upPressed) {
+                cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
+                dirty = true;
+            }
+            if (downPressed) {
+                cursor = cursor + 1 >= itemCount() ? 0 : cursor + 1;
+                dirty = true;
+            }
         }
         if (buttonPressed(buttons[2])) {
             activateItem();
@@ -337,6 +381,11 @@ void UITask(void* parameter) {
 
         const uint32_t now = millis();
         if ((uint32_t)(now - lastRefreshMs) >= REFRESH_MS) dirty = true;
+        const uint32_t sec = clockSeconds();
+        if (sec != lastClockSec) {
+            lastClockSec = sec;
+            dirty = true;
+        }
         if (dirty &&(uint32_t)(now - lastDrawMs) >= REDRAW_MS) {
             draw();
             dirty = false;

@@ -337,6 +337,9 @@ void BLETask(void* parameter) {
                 gUpdate.acc[0] = gSensorElement.acc_x;
                 gUpdate.acc[1] = gSensorElement.acc_y;
                 gUpdate.acc[2] = gSensorElement.acc_z;
+                gUpdate.gyro[0] = gSensorElement.gyro_x;
+                gUpdate.gyro[1] = gSensorElement.gyro_y;
+                gUpdate.gyro[2] = gSensorElement.gyro_z;
                 postUi(gUpdate);
                 DEBUG_PRINTLN("G sensor data received");
                 DEBUG_PRINT("Acc X: ");

@@ -96,6 +96,7 @@
 #define OLED_TMO_MS         5       /* I2C SI wait limit (bus stuck / no pull-up)            */
 #define OLED_ROW_MS         20      /* one text row is refreshed per period (8 rows)         */
 #define OLED_RETRY_MS       1000    /* retry init when the OLED did not answer               */
+#define KEY_DEBOUNCE_MS     200     /* P3.0 / P1.7 presses closer than this are one press    */
 #define PPG_LOST_MS         1500    /* no PPG sample for this long -> NO SIGNAL              */
 
 /* BM7701 reset pin */
@@ -625,6 +626,39 @@ __xdata char ln_dig[5];
 UINT8  oled_row  = 0;
 UINT16 t_oled    = 0;
 __bit  oled_ok;
+__bit  oled_page;                           /* 0 = PPG page, 1 = IMU page                  */
+__bit  oled_off;                            /* 1 = panel switched off by the P1.7 key      */
+
+/* Keys, active low to GND, falling edge: P3.0 = INT0 changes the page, P1.7 = INT1 switches */
+/* the OLED on / off. The ISRs only set a flag, key_task() debounces in the main loop.      */
+volatile __bit key_page;
+volatile __bit key_oled;
+UINT16 t_key_page = 0;
+UINT16 t_key_oled = 0;
+
+void Key_INT0_ISR(void) __interrupt (0)
+{
+    key_page = 1;
+}
+
+void Key_INT1_ISR(void) __interrupt (2)
+{
+    key_oled = 1;
+}
+
+static void key_init(void)
+{
+    P30_QUASI_MODE;                         /* weak internal pull-up */
+    P17_QUASI_MODE;
+    P30 = 1;
+    P17 = 1;
+    set_IT0;                                /* edge triggered */
+    set_IT1;
+    clr_IE0;
+    clr_IE1;
+    set_EX0;
+    set_EX1;
+}
 
 static __bit i2c_wait(void)
 {
@@ -788,6 +822,20 @@ static void oled_build(UINT8 row, UINT8 state)
 {
     UINT8 st = disp[PKT_ST];
     ln_n = 0;
+    if (oled_page && row >= 3)              /* IMU page: rows 0..2 (name, BLE, UP) stay */
+    {
+        /* ponytail: no IMU is wired / read on this board yet, so the values are always dashes. */
+        /*           A future IMU driver fills the six int16 values here.                     */
+        switch (row)
+        {
+        case 3:  ln_s("IMU:NO SENSOR");      break;
+        case 4:  ln_s("AX:------ GX:------"); break;
+        case 5:  ln_s("AY:------ GY:------"); break;
+        case 6:  ln_s("AZ:------ GZ:------"); break;
+        default: break;
+        }
+    }
+    else
     switch (row)
     {
     case 0:
@@ -839,11 +887,44 @@ static void oled_build(UINT8 row, UINT8 state)
     while (ln_n < OLED_COLS) ln[ln_n++] = ' ';
 }
 
+static void oled_power(__bit on)            /* SH1106 display off 0xAE / on 0xAF, RAM is kept */
+{
+    if (!(oled_begin(0x00) && i2c_tx(on ? 0xAF : 0xAE, 0x28)))
+        oled_ok = 0;                        /* re-init after OLED_RETRY_MS (turns the panel on) */
+    i2c_stop();
+}
+
+static void key_task(void)
+{
+    UINT16 t = now_ms();
+
+    if (key_page)
+    {
+        key_page = 0;
+        if ((UINT16)(t - t_key_page) >= KEY_DEBOUNCE_MS)
+        {
+            t_key_page = t;
+            oled_page = !oled_page;
+        }
+    }
+    if (key_oled)
+    {
+        key_oled = 0;
+        if ((UINT16)(t - t_key_oled) >= KEY_DEBOUNCE_MS)
+        {
+            t_key_oled = t;
+            oled_off = !oled_off;
+            if (oled_ok) oled_power(!oled_off);
+        }
+    }
+}
+
 static void oled_task(UINT8 state)
 {
     UINT8 i;
     UINT16 t = now_ms();
 
+    if (oled_off) return;                   /* panel is off: no I2C traffic, no re-init */
     if (!oled_ok)
     {
         if ((UINT16)(t - t_oled) >= OLED_RETRY_MS)
@@ -896,6 +977,7 @@ void main(void)
     UART0_Init();                               /* PPG, after UART1_Init (both touch BRCK) */
     set_ES_1;                                   /* UART1 interrupt */
     set_ES;                                     /* UART0 interrupt */
+    key_init();                                 /* P3.0 page, P1.7 OLED on / off */
     set_EA;
 
     t_state = now_ms();
@@ -1115,6 +1197,7 @@ void main(void)
         }
 
 #if USE_OLED
+        key_task();
         oled_task(state);
 #endif
 
