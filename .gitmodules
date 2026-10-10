@@ -21,4 +21,4 @@
 	url = https://github.com/Squirrel-li/MAX98357.git
 [submodule "external/libraries/MiniBPM"]
 	path = external/libraries/MiniBpm
-	url = https://github.com/breakfastquay/minibpm.git
+	url = https://github.com/Squirrel-li/BPM.git
