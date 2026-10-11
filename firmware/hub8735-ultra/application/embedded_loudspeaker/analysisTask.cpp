@@ -88,6 +88,9 @@ void analysisTask(void* parameter)
         userInfo.age > 0 && maxHeartRate > 0.0f
             ? static_cast<uint16_t>(maxHeartRate + 0.5f)
             : 0;
+    LOGI("ANALYSIS", "started: age=%d HRmax=%u bpm (zones: 60/70/80/90%%)", userInfo.age,
+         static_cast<unsigned>(hrmaxBpm));
+    if (hrmaxBpm == 0) LOGE("ANALYSIS", "HRmax is 0 (invalid user info); target BPM will never be produced");
     TargetBpmState bpmState{hrmaxBpm, 0};
     HeartZoneState zoneState{};
     PpgSensorElement latest{};
@@ -98,24 +101,36 @@ void analysisTask(void* parameter)
     uint32_t lastBpmUpdateMs = 0;
     uint16_t lastQueuedBpm = 0;
     uint8_t lastQueuedZone = 0;
+    bool wasFresh = false;
+    uint8_t lastZoneSeen = 0;
 
     for (;;) {
         PpgSensorElement sample{};
         while (xQueueReceive(ppgSensorQueue, &sample, 0) == pdPASS) {
-            DEBUG_PRINT("BLETask -> analysisTask [recv]: PPG HR=");
-            DEBUG_PRINT(sample.heartRateBpm);
-            DEBUG_PRINT(" status=");
-            DEBUG_PRINT(sample.status);
-            DEBUG_PRINT(" sequence=");
-            DEBUG_PRINTLN(sample.sequence);
-            haveValidPpg = sample.status == 2 && sample.heartRateBpm != 0;
+            const bool valid = sample.status == 2 && sample.heartRateBpm != 0;
+            LOGT("ANALYSIS", "PPG recv: HR=%u status=%u sequence=%lu valid=%d", static_cast<unsigned>(sample.heartRateBpm),
+                 static_cast<unsigned>(sample.status), static_cast<unsigned long>(sample.sequence), valid ? 1 : 0);
+            if (valid != haveValidPpg) {
+                LOGI("ANALYSIS", "heart rate %s (HR=%u status=%u)", valid ? "valid" : "invalid",
+                     static_cast<unsigned>(sample.heartRateBpm), static_cast<unsigned>(sample.status));
+            }
+            haveValidPpg = valid;
             if (haveValidPpg) latest = sample;
         }
 
         const uint32_t now = millis();
-        if (haveValidPpg &&
-            (uint32_t)(now - latest.hub_rx_time_ms) <= 6000u &&
-            bpmState.hrmax != 0) {
+        const bool fresh = haveValidPpg &&
+            (uint32_t)(now - latest.hub_rx_time_ms) <= 6000u && bpmState.hrmax != 0;
+        if (fresh != wasFresh) {
+            if (fresh) {
+                LOGI("ANALYSIS", "sensor data fresh again (HR=%u)", static_cast<unsigned>(latest.heartRateBpm));
+            } else if (haveValidPpg && bpmState.hrmax != 0) {
+                LOGW("ANALYSIS", "sensor data stale (> 6 s since last valid sample); keeping last target BPM=%u",
+                     static_cast<unsigned>(lastQueuedBpm));
+            }
+            wasFresh = fresh;
+        }
+        if (fresh) {
             if (!haveUpdatedBpm ||
                 (uint32_t)(now - lastBpmUpdateMs) >= 1000u) {
                 haveUpdatedBpm = true;
@@ -123,8 +138,22 @@ void analysisTask(void* parameter)
                 const uint8_t zone = heart_zone_update(
                     &zoneState, bpmState.hrmax, latest.heartRateBpm, now,
                     10000u, 2u);
+                const uint16_t previousBpm = bpmState.bpm;
                 const int target = target_bpm_update_for_zone(
                     &bpmState, latest.heartRateBpm, zone);
+                if (zone != lastZoneSeen) {
+                    LOGI("ANALYSIS", "zone %u -> %u (HR=%u, %u%% of HRmax)", static_cast<unsigned>(lastZoneSeen),
+                         static_cast<unsigned>(zone), static_cast<unsigned>(latest.heartRateBpm),
+                         static_cast<unsigned>(latest.heartRateBpm * 100u / bpmState.hrmax));
+                    lastZoneSeen = zone;
+                } else if (zoneState.pending != 0) {
+                    LOGD("ANALYSIS", "zone %u change to %u pending (HR=%u, needs 10 s dwell)",
+                         static_cast<unsigned>(zone), static_cast<unsigned>(zoneState.pending),
+                         static_cast<unsigned>(latest.heartRateBpm));
+                }
+                LOGD("ANALYSIS", "update: HR=%u zone=%u target=%d (prev=%u%s)", static_cast<unsigned>(latest.heartRateBpm),
+                     static_cast<unsigned>(zone), target, static_cast<unsigned>(previousBpm),
+                     (previousBpm != 0 && target == static_cast<int>(previousBpm) + 5) ? ", ramp-limited +5" : "");
                 if (target > 0 &&
                     (target != lastQueuedBpm || zone != lastQueuedZone) &&
                     targetBpmResultQueue != nullptr) {
@@ -134,12 +163,10 @@ void analysisTask(void* parameter)
                     if (xQueueOverwrite(targetBpmResultQueue, &result) == pdPASS) {
                         lastQueuedBpm = result.targetBpm;
                         lastQueuedZone = result.zone;
-                        DEBUG_PRINT("analysisTask -> controlTask: target BPM=");
-                        DEBUG_PRINT(result.targetBpm);
-                        DEBUG_PRINT(" zone=");
-                        DEBUG_PRINTLN(result.zone);
+                        LOGI("ANALYSIS", "target BPM -> control: %u (zone %u)", static_cast<unsigned>(result.targetBpm),
+                             static_cast<unsigned>(result.zone));
                     } else {
-                        DEBUG_PRINTLN("analysisTask -> controlTask: failed to queue target BPM");
+                        LOGE("ANALYSIS", "failed to queue target BPM %u", static_cast<unsigned>(result.targetBpm));
                     }
                 }
             }
@@ -148,12 +175,12 @@ void analysisTask(void* parameter)
         }
 
         if (xQueueReceive(accSensorQueue, &accElement, 0) == pdPASS) {
-            DEBUG_PRINT("BLETask -> analysisTask [recv]: Acc sequence=");
-            DEBUG_PRINTLN(accElement.sequence);
+            LOGT("ANALYSIS", "Acc recv: %d,%d,%d sequence=%lu", accElement.acc_x, accElement.acc_y,
+                 accElement.acc_z, static_cast<unsigned long>(accElement.sequence));
         }
         if (xQueueReceive(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
-            DEBUG_PRINT("BLETask -> analysisTask [recv]: Gyro sequence=");
-            DEBUG_PRINTLN(gyroElement.sequence);
+            LOGT("ANALYSIS", "Gyro recv: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
+                 gyroElement.gyro_z, static_cast<unsigned long>(gyroElement.sequence));
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
