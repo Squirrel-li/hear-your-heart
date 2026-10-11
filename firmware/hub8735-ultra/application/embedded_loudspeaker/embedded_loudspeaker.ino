@@ -27,54 +27,61 @@ QueueHandle_t uiCmdQueue = nullptr;
 
 UserInfo userInfo;
 volatile bool musicLibraryReady = false;
+volatile bool musicStorageReady = false;
+volatile bool musicBpmAnalysisBusy = false;
 
 void setup()
 {
     // 初始化串口
     #ifdef DEBUG_MODE
     Serial.begin(2000000);
-    DEBUG_PRINTLN("Initializing USB type-C DEBUG serial port");
     #else
     Serial2.begin(115200);
-    DEBUG_PRINTLN("Initializing DEBUG serial port");
     #endif
-    DEBUG_PRINTLN("Starting embedded loudspeaker application");
-    
-    // Serial2 TX is pin 8, which UITask uses as a menu button; PPG data now comes over BLE.
+    logInit();
+    LOGI("MAIN", "embedded_loudspeaker build %s %s, log level=%d", __DATE__, __TIME__, LOG_LEVEL);
+    #ifdef DEBUG_MODE
+    LOGI("MAIN", "log port: USB Type-C Serial (2000000 baud)");
+    #else
+    LOGI("MAIN", "log port: Serial2 (115200 baud), TX = D8 shared with UI button");
+    #endif
 
     userInfo.age = 25;
     userInfo.weight = 70.5;
     userInfo.height = 175.0;
-    
+    LOGI("MAIN", "user: age=%d weight=%d height=%d", static_cast<int>(userInfo.age),
+         static_cast<int>(userInfo.weight), static_cast<int>(userInfo.height));
+
     // 初始化應用程式佇列
     if (!appQueuesInit()) {
-        DEBUG_PRINTLN("Failed to initialize app queues");
+        LOGE("MAIN", "app queue creation failed; halting");
         while(1);
     }
+    LOGI("MAIN", "app queues created, free heap=%u", static_cast<unsigned>(xPortGetFreeHeapSize()));
 
     // 建立任務
     if (xTaskCreate(BLETask, "BLE", 1024, nullptr, 2, &BLETaskHandle) != pdPASS) {
-        DEBUG_PRINTLN("BLE task create failed");
+        LOGE("MAIN", "BLE task create failed; halting");
         while(1);
     }
     if (xTaskCreate(analysisTask, "analysis", 1024, nullptr, 2, &analysisTaskHandle) != pdPASS) {
-        DEBUG_PRINTLN("analysis task create failed");
+        LOGE("MAIN", "analysis task create failed; halting");
         while(1);
     }
     if (xTaskCreate(controlTask, "control", 1024, nullptr, 2, &controlTaskHandle) != pdPASS) {
-        DEBUG_PRINTLN("control task create failed");
+        LOGE("MAIN", "control task create failed; halting");
         while(1);
     }
     if (xTaskCreate(audioTask, "audio", 1024, nullptr, 2, &audioTaskHandle) != pdPASS) {
-        DEBUG_PRINTLN("audio task create failed");
+        LOGE("MAIN", "audio task create failed; halting");
         while(1);
     }
     if (xTaskCreate(UITask, "UI", 2048, nullptr, 2, &UITaskHandle) != pdPASS) {
-        DEBUG_PRINTLN("UI task create failed");
+        LOGE("MAIN", "UI task create failed; halting");
         while(1);
     }
-    DEBUG_PRINTLN("All tasks created successfully");
-
+    LOGI("MAIN", "all tasks created (stack words: BLE/analysis/control/audio=1024, UI=2048), free heap=%u",
+         static_cast<unsigned>(xPortGetFreeHeapSize()));
 }
 
 void loop() 
