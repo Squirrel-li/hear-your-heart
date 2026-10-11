@@ -1,6 +1,6 @@
 # 感測端 BLE 介面
 
-更新：2026-10-07
+更新：2026-10-11
 
 ## GATT
 
@@ -27,7 +27,7 @@
 ```
 
 - `sensor_time_ms`：uint32，sensor 時鐘，取樣時刻（ms）。
-- `msgType`：`0x01` PPG、`0x02` G-sensor。
+- `msgType`：`0x01` PPG、`0x02` Acc、`0x03` Gyro。
 
 PPG（20B）：
 
@@ -37,10 +37,11 @@ PPG（20B）：
 
 - `status`：0 finger off、1 finger on、2 有效資料。
 
-G-sensor（21B）：
+Acc（15B）與 Gyro（15B），同一次取樣各送一筆；Acc 先送，兩筆的 `time`、`sequence` 相同：
 
 ```
-| time 4B | 02 | sequence 4B | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z |   （各軸 int16 原始 counts）
+| time 4B | 02 | sequence 4B | acc_x | acc_y | acc_z |      （各軸 int16 原始 counts）
+| time 4B | 03 | sequence 4B | gyro_x | gyro_y | gyro_z |
 ```
 
-- 預設量程 ±8 g、±1000 dps。21B 超過預設 MTU 的上限 20B，需要把 MTU 調大到至少 24，不分包。
+- 預設量程 ±8 g、±1000 dps。兩個 frame 都在預設 MTU 的 20B 內，不需調大 MTU。

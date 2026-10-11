@@ -26,6 +26,8 @@ class RemoteSensorSimulatorApp extends StatelessWidget {
       );
 }
 
+const _profileLabels = ['FFF0 / FFF1 / FFF2', '524CACC0… / D002 / D001'];
+
 class SimulatorPage extends StatefulWidget {
   const SimulatorPage({super.key});
 
@@ -113,7 +115,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
   }
 
   String _friendlyError(String? error) => switch (error) {
-        'not_connected' => '未連線或未訂閱 FFF1，資料未消耗。',
+        'not_connected' => '未連線或未訂閱 Notify，資料未消耗。',
         'permission_required' => '請允許附近裝置權限後重新啟動 App。',
         'bluetooth_disabled' => '請先開啟手機藍牙。',
         'ble_unsupported' => '手機不支援 BLE Peripheral。',
@@ -138,6 +140,20 @@ class _SimulatorPageState extends State<SimulatorPage> {
       }
     } catch (error) {
       if (mounted) setState(() => _message = '套用名稱失敗：$error');
+    }
+  }
+
+  Future<void> _applyProfile(int profile) async {
+    try {
+      final map = await _bridge.setProfile(profile);
+      if (mounted) {
+        setState(() {
+          _ble = BleStatus.fromMap(map);
+          _message = '已切換 UUID：${_profileLabels[profile]}（需重新開始廣播）。';
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _message = '切換 UUID 失敗：$error');
     }
   }
 
@@ -241,7 +257,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
                   _StateRow(label: '廣播', value: _ble.advertising ? '進行中' : '已停止', good: _ble.advertising),
                   _StateRow(label: '連線', value: _ble.connected ? '已連線' : '未連線', good: _ble.connected),
                   _StateRow(
-                    label: 'FFF1 訂閱',
+                    label: 'Notify 訂閱',
                     value: _ble.subscribed ? '已訂閱 Notify' : '未訂閱',
                     good: _ble.subscribed,
                   ),
@@ -267,6 +283,18 @@ class _SimulatorPageState extends State<SimulatorPage> {
                   const SizedBox(width: 10),
                   FilledButton(onPressed: _applyName, child: const Text('套用')),
                 ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            _Section(
+              title: 'UUID 設定',
+              child: SegmentedButton<int>(
+                segments: [
+                  for (var i = 0; i < _profileLabels.length; i++)
+                    ButtonSegment(value: i, label: Text(_profileLabels[i], style: const TextStyle(fontSize: 12))),
+                ],
+                selected: {_ble.profile},
+                onSelectionChanged: (value) => _applyProfile(value.first),
               ),
             ),
             const SizedBox(height: 10),
@@ -363,7 +391,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
             ),
             const SizedBox(height: 10),
             _Section(
-              title: 'FFF2 寫入日誌',
+              title: 'RX 寫入日誌',
               trailing: TextButton(
                 onPressed: _writeLog.isEmpty ? null : () => setState(_writeLog.clear),
                 child: const Text('清除日誌'),
@@ -371,7 +399,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
               child: SizedBox(
                 height: 150,
                 child: _writeLog.isEmpty
-                    ? const Center(child: Text('尚無 FFF2 寫入'))
+                    ? const Center(child: Text('尚無 RX 寫入'))
                     : ListView.builder(
                         itemCount: _writeLog.length,
                         itemBuilder: (context, index) => Padding(

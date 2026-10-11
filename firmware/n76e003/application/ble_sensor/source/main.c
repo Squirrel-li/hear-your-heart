@@ -11,6 +11,9 @@
 /*    N76E003 P1.3 SCL, P1.4 SDA (open-drain, the OLED module provides the pull-ups)                       */
 /*    shows BLE name / link state / PPG values; one text row is refreshed per OLED_ROW_MS                  */
 /*                                                                                                         */
+/*  IMU  LSM6DS3 on the same I2C0 bus, 7-bit address 0x6A (SA0 = GND)                                      */
+/*    read once per second, sent as a 15 B Acc frame (0x02) + a 15 B Gyro frame (0x03), shown on the IMU page */
+/*                                                                                                         */
 /*  PPG  BMH08002-4 / BMH83M002 (oximeter module) on UART0, 38400 8N1                                      */
 /*    N76E003 P0.6 TXD    ->  PPG RX                                                                       */
 /*    N76E003 P0.7 RXD    <-  PPG TX                                                                       */
@@ -676,7 +679,25 @@ static __bit i2c_start(void)
     return I2STAT == 0x08;
 }
 
-static __bit i2c_tx(UINT8 b, UINT8 ack_status)   /* 0x18 after SLA+W, 0x28 after data */
+static __bit i2c_rstart(void)                    /* repeated start */
+{
+    STA = 1;
+    SI  = 0;
+    if (!i2c_wait()) return 0;
+    return I2STAT == 0x10;
+}
+
+static void i2c_bus_init(void)                   /* shared by the OLED and the LSM6DS3 */
+{
+    P13_OPENDRAIN_MODE;                     /* SCL */
+    P14_OPENDRAIN_MODE;                     /* SDA */
+    I2CPX = 0;                              /* I2C0 on P1.3 / P1.4 */
+    I2CLK = OLED_I2CLK;
+    I2CEN = 0;
+    I2CEN = 1;
+}
+
+static __bit i2c_tx(UINT8 b, UINT8 ack_status)   /* 0x18 after SLA+W, 0x28 after data, 0x40 after SLA+R */
 {
     I2DAT = b;
     STA = 0;
@@ -749,12 +770,7 @@ static __bit oled_row_draw(UINT8 row)
 static void oled_hw_init(void)
 {
     UINT8 i, j;
-    P13_OPENDRAIN_MODE;                     /* SCL */
-    P14_OPENDRAIN_MODE;                     /* SDA */
-    I2CPX = 0;                              /* I2C0 on P1.3 / P1.4 */
-    I2CLK = OLED_I2CLK;
-    I2CEN = 0;
-    I2CEN = 1;
+    i2c_bus_init();
 
     oled_ok = 0;
     if (!oled_begin(0x00)) { i2c_stop(); return; }          /* no ACK: no OLED / bus problem */
@@ -818,20 +834,164 @@ static UINT32 uptime_ms(void)
     return t;
 }
 
+/*============================== LSM6DS3 (I2C0, shared with the OLED) ======*/
+/* Read once per IMU_PERIOD_MS, sent as an Acc frame and a Gyro frame (ble-notify-data-format.md */
+/* section 5) and shown on the IMU page. Accel +-8 g, gyro +-1000 dps, both ODR 26 Hz.          */
+#define IMU_ADDR            0xD4            /* 8-bit address, SA0 = GND (7-bit 0x6A) */
+#define IMU_PERIOD_MS       1000            /* 1 Hz */
+#define SENSOR_ACC          0x02
+#define SENSOR_GYRO         0x03
+#define IMU_PKT_LEN         15
+#define IMU_PKT_SEQ         5
+#define IMU_PKT_DATA        9               /* x y z: int16 Big-endian */
+#define IMU_PEND_ACC        0x01
+#define IMU_PEND_GYRO       0x02
+
+#define LSM_WHO_AM_I        0x0F            /* 0x69 LSM6DS3, 0x6A LSM6DS3-C / TR-C */
+#define LSM_CTRL1_XL        0x10
+#define LSM_CTRL2_G         0x11
+#define LSM_CTRL3_C         0x12
+#define LSM_OUTX_L_G        0x22            /* gyro XYZ then accel XYZ, little-endian */
+
+__xdata UINT8 acc_pkt[IMU_PKT_LEN]  = { 0, 0, 0, 0, SENSOR_ACC };
+__xdata UINT8 gyro_pkt[IMU_PKT_LEN] = { 0, 0, 0, 0, SENSOR_GYRO };
+__xdata UINT8 imu_raw[12];
+UINT32 imu_seq   = 0;
+UINT16 t_imu     = 0;
+__bit  imu_ok;                              /* sensor answered WHO_AM_I and is configured */
+__bit  imu_skip;                            /* init failed: IMU is not used any more      */
+__bit  imu_has;                             /* acc_pkt / gyro_pkt hold a sample           */
+UINT8  imu_ready;                           /* IMU_PEND_* bits: frames not sent yet       */
+
+static __bit imu_write(UINT8 reg, UINT8 val)
+{
+    __bit ok = i2c_start() && i2c_tx(IMU_ADDR, 0x18) && i2c_tx(reg, 0x28) && i2c_tx(val, 0x28);
+    i2c_stop();
+    return ok;
+}
+
+static __bit imu_read(UINT8 reg, UINT8 *buf, UINT8 n)
+{
+    UINT8 i;
+    if (!(i2c_start() && i2c_tx(IMU_ADDR, 0x18) && i2c_tx(reg, 0x28) &&
+          i2c_rstart() && i2c_tx(IMU_ADDR | 1, 0x40)))
+    {
+        i2c_stop();
+        return 0;
+    }
+    for (i = 0; i < n; i++)
+    {
+        AA = (i + 1 < n);                   /* NACK the last byte */
+        SI = 0;
+        if (!i2c_wait()) { i2c_stop(); return 0; }
+        buf[i] = I2DAT;
+    }
+    i2c_stop();
+    return 1;
+}
+
+static void imu_init(void)
+{
+    UINT8 id;
+    imu_ok  = 0;
+    imu_has = 0;
+    i2c_bus_init();
+    if (!imu_read(LSM_WHO_AM_I, &id, 1) || (id != 0x69 && id != 0x6A)) return;
+    if (imu_write(LSM_CTRL3_C,  0x44) &&    /* BDU, auto-increment */
+        imu_write(LSM_CTRL1_XL, 0x2C) &&    /* 26 Hz, +-8 g        */
+        imu_write(LSM_CTRL2_G,  0x28))      /* 26 Hz, +-1000 dps   */
+        imu_ok = 1;
+}
+
+static void imu_task(void)
+{
+    UINT8  i;
+    UINT16 t = now_ms();
+    UINT32 up;
+
+    if (imu_skip || (UINT16)(t - t_imu) < IMU_PERIOD_MS) return;
+    t_imu = t;
+    if (!imu_ok)
+    {
+        imu_init();                         /* first sample one period after init */
+        if (!imu_ok) imu_skip = 1;          /* init failed: give up until the next power-up */
+        return;
+    }
+    if (!imu_read(LSM_OUTX_L_G, imu_raw, 12))
+    {
+        imu_ok  = 0;                        /* re-init next period */
+        imu_has = 0;
+        return;
+    }
+
+    up = uptime_ms();
+    acc_pkt[0] = gyro_pkt[0] = (UINT8)(up >> 24);
+    acc_pkt[1] = gyro_pkt[1] = (UINT8)(up >> 16);
+    acc_pkt[2] = gyro_pkt[2] = (UINT8)(up >> 8);
+    acc_pkt[3] = gyro_pkt[3] = (UINT8)up;
+    acc_pkt[IMU_PKT_SEQ + 0] = gyro_pkt[IMU_PKT_SEQ + 0] = (UINT8)(imu_seq >> 24);
+    acc_pkt[IMU_PKT_SEQ + 1] = gyro_pkt[IMU_PKT_SEQ + 1] = (UINT8)(imu_seq >> 16);
+    acc_pkt[IMU_PKT_SEQ + 2] = gyro_pkt[IMU_PKT_SEQ + 2] = (UINT8)(imu_seq >> 8);
+    acc_pkt[IMU_PKT_SEQ + 3] = gyro_pkt[IMU_PKT_SEQ + 3] = (UINT8)imu_seq;
+    imu_seq++;
+    for (i = 0; i < 6; i++)
+    {
+        acc_pkt[IMU_PKT_DATA + i]  = imu_raw[6 + (i ^ 1)];  /* accel, raw[6..11] LE -> BE */
+        gyro_pkt[IMU_PKT_DATA + i] = imu_raw[i ^ 1];        /* gyro,  raw[0..5]  LE -> BE */
+    }
+    imu_has   = 1;
+    imu_ready = IMU_PEND_ACC | IMU_PEND_GYRO;
+}
+
+static void imu_send(void)                  /* one frame per call: Acc first, then Gyro on the next round */
+{
+    if (imu_ready & IMU_PEND_ACC)
+    {
+        bm_notify_send(acc_pkt, IMU_PKT_LEN);
+        imu_ready &= ~IMU_PEND_ACC;
+    }
+    else
+    {
+        bm_notify_send(gyro_pkt, IMU_PKT_LEN);
+        imu_ready &= ~IMU_PEND_GYRO;
+    }
+}
+
+static int imu_val(UINT8 i)                 /* i: 0..2 accel XYZ, 3..5 gyro XYZ */
+{
+    __xdata UINT8 *p = (i < 3 ? acc_pkt : gyro_pkt) + IMU_PKT_DATA + 2 * (i % 3);
+    return ((int)p[0] << 8) | p[1];
+}
+
+static void ln_i(int v, UINT8 w)            /* right-aligned signed decimal, dashes when there is no sample */
+{
+    UINT8  i = 0, neg = 0;
+    UINT16 u = (UINT16)v;
+    if (!imu_has)
+    {
+        while (w--) ln_c('-');
+        return;
+    }
+    if (v < 0) { neg = 1; u = 0 - u; }
+    do { ln_dig[i++] = '0' + (UINT8)(u % 10); u /= 10; } while (u);
+    w -= i + neg;
+    while (w--) ln_c(' ');
+    if (neg) ln_c('-');
+    while (i) ln_c(ln_dig[--i]);
+}
+
 static void oled_build(UINT8 row, UINT8 state)
 {
     UINT8 st = disp[PKT_ST];
     ln_n = 0;
     if (oled_page && row >= 3)              /* IMU page: rows 0..2 (name, BLE, UP) stay */
     {
-        /* ponytail: no IMU is wired / read on this board yet, so the values are always dashes. */
-        /*           A future IMU driver fills the six int16 values here.                     */
         switch (row)
         {
-        case 3:  ln_s("IMU:NO SENSOR");      break;
-        case 4:  ln_s("AX:------ GX:------"); break;
-        case 5:  ln_s("AY:------ GY:------"); break;
-        case 6:  ln_s("AZ:------ GZ:------"); break;
+        case 3:  ln_s(imu_ok ? "IMU:OK" : "IMU:NO SENSOR"); break;
+        case 4:  ln_s("AX:"); ln_i(imu_val(0), 6); ln_s(" GX:"); ln_i(imu_val(3), 6); break;
+        case 5:  ln_s("AY:"); ln_i(imu_val(1), 6); ln_s(" GY:"); ln_i(imu_val(4), 6); break;
+        case 6:  ln_s("AZ:"); ln_i(imu_val(2), 6); ln_s(" GZ:"); ln_i(imu_val(5), 6); break;
         default: break;
         }
     }
@@ -1011,6 +1171,9 @@ void main(void)
 
         /* not streaming: drop the sample so the first frame after subscription is fresh */
         if (state != ST_WAIT_NOTIFY && state != ST_NOTIFY) ppg_ready = 0;
+        if (state != ST_NOTIFY) imu_ready = 0;      /* the probe is always a PPG frame */
+
+        imu_task();                                 /* also runs without a BLE link: feeds the OLED */
 
         switch (state)
         {
@@ -1170,7 +1333,8 @@ void main(void)
             }
 #endif
             cmd_state = CMD_IDLE;
-            if (ppg_ready) ppg_send();              /* one frame per PPG sample */
+            if (imu_ready) imu_send();              /* 1 Hz, the PPG samples of these 2 rounds are dropped */
+            else if (ppg_ready) ppg_send();         /* one frame per PPG sample */
             break;
 
         case ST_DISC_WAIT:                              /* no command for 5 ms after disconnect */

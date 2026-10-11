@@ -8,6 +8,7 @@ class BleStatus {
     this.connected = false,
     this.subscribed = false,
     this.name = 'BLE_sensor_ITAP',
+    this.profile = 0,
     this.error,
   });
 
@@ -17,6 +18,7 @@ class BleStatus {
   final bool connected;
   final bool subscribed;
   final String name;
+  final int profile;
   final String? error;
 
   factory BleStatus.fromMap(Map<dynamic, dynamic> map) => BleStatus(
@@ -26,6 +28,7 @@ class BleStatus {
         connected: map['connected'] == true,
         subscribed: map['subscribed'] == true,
         name: map['name'] as String? ?? 'BLE_sensor_ITAP',
+        profile: map['profile'] as int? ?? 0,
         error: map['error'] as String?,
       );
 }
@@ -58,6 +61,9 @@ class BleBridge {
 
   Future<Map<dynamic, dynamic>> setName(String name) async =>
       _map(await _methods.invokeMethod('setName', {'name': name}));
+
+  Future<Map<dynamic, dynamic>> setProfile(int profile) async =>
+      _map(await _methods.invokeMethod('setProfile', {'profile': profile}));
 
   Future<Map<dynamic, dynamic>> startAdvertising() async =>
       _map(await _methods.invokeMethod('startAdvertising'));
