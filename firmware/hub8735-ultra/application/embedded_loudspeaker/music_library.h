@@ -6,8 +6,6 @@
 #include <string.h>
 #include <stdio.h>
 
-// SD 卡根目錄的曲目資料檔：{"version":1,"songs":[{"file":"a.mp3","bpm":120,"genre":"Pop"}]}
-// 這裡只負責資料檔的讀寫與驗證，尚未接入選曲（選曲仍使用 song_catalog.h）。
 constexpr const char* MUSIC_LIBRARY_FILE = "music_library.json";
 constexpr size_t MUSIC_LIBRARY_MAX = 32;
 constexpr size_t MUSIC_FILE_MAX = 32;

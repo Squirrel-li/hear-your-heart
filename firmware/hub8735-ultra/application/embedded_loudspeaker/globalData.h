@@ -13,7 +13,8 @@ constexpr uint16_t LOG_MESSAGE_MAX = 96;
 
 extern QueueHandle_t bleRxFrameQueue;	// BLE notification callback queue
 extern QueueHandle_t ppgSensorQueue;	// PPG sensor data queue
-extern QueueHandle_t gSensorQueue;		// G-sensor data queue
+extern QueueHandle_t accSensorQueue;	// Accelerometer data queue
+extern QueueHandle_t gyroSensorQueue;	// Gyroscope data queue
 extern QueueHandle_t targetBpmResultQueue;	// Latest analysis result for controlTask
 extern QueueHandle_t audioCmdQueue;		// Audio command queue
 extern QueueHandle_t audioPlaybackEventQueue;	// Playback events for controlTask
@@ -22,6 +23,10 @@ extern QueueHandle_t uiCmdQueue;		// Menu commands from UITask to controlTask
 extern QueueHandle_t bleTxQueue;		// BLE transmission queue
 
 bool appQueuesInit();
+
+// 啟動流程：audioTask 先初始化 SD 並載入 musicLibrary，之後才設為 true；
+// controlTask 等到 true 才開始選曲，避免讀到載入中的曲目表。
+extern volatile bool musicLibraryReady;
 
 struct UserInfo {
     int age;
@@ -68,17 +73,27 @@ struct PpgSensorElement {
     uint16_t ppg2;    // PPG2
 };
 
-// G sensor 三軸資料
-// payload (msgType 0x02), frame = 21B
-// | sequence | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z |
-// | 4B       | 2B    | 2B    | 2B    | 2B     | 2B     | 2B     |
-struct GSensorElement {
+// Acc 三軸資料
+// payload (msgType 0x02), frame = 15B
+// | sequence | acc_x | acc_y | acc_z |
+// | 4B       | 2B    | 2B    | 2B    |
+struct AccElement {
     uint32_t hub_rx_time_ms;
     uint32_t sensor_time_ms;
     uint32_t sequence;
     int16_t acc_x;
     int16_t acc_y;
     int16_t acc_z;
+};
+
+// Gyro 三軸資料
+// payload (msgType 0x03), frame = 15B
+// | sequence | gyro_x | gyro_y | gyro_z |
+// | 4B       | 2B     | 2B     | 2B     |
+struct GyroElement {
+    uint32_t hub_rx_time_ms;
+    uint32_t sensor_time_ms;
+    uint32_t sequence;
     int16_t gyro_x;
     int16_t gyro_y;
     int16_t gyro_z;
@@ -122,7 +137,8 @@ enum class UiUpdateType : uint8_t {
     Audio,
     Ble,
     Error,
-    GSensor,
+    Acc,
+    Gyro,
     Mode
 };
 
@@ -140,7 +156,7 @@ enum class AudioState : uint8_t {
     Paused
 };
 
-// Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleConnected; GSensor: acc;
+// Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleConnected; Acc: acc; Gyro: gyro;
 // Audio: audioState and, when a new file starts, filename; Mode: mode
 struct UiUpdateElement {
     UiUpdateType type;

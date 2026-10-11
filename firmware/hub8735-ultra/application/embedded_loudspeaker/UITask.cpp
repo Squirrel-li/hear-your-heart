@@ -77,7 +77,8 @@ bool havePpg = false;
 uint16_t heartRate = 0;
 uint8_t spo2 = 0;
 uint8_t ppgStatus = 0;
-bool haveGSensor = false;
+bool haveAcc = false;
+bool haveGyro = false;
 int16_t acc[3] = {0, 0, 0};
 int16_t gyro[3] = {0, 0, 0};
 
@@ -178,12 +179,13 @@ void applyUpdate(const UiUpdateElement& update)
         spo2 = update.spo2;
         ppgStatus = update.sensorStatus;
         break;
-    case UiUpdateType::GSensor:
-        haveGSensor = true;
-        for (uint8_t i = 0; i < 3; i++) {
-            acc[i] = update.acc[i];
-            gyro[i] = update.gyro[i];
-        }
+    case UiUpdateType::Acc:
+        haveAcc = true;
+        for (uint8_t i = 0; i < 3; i++) acc[i] = update.acc[i];
+        break;
+    case UiUpdateType::Gyro:
+        haveGyro = true;
+        for (uint8_t i = 0; i < 3; i++) gyro[i] = update.gyro[i];
         break;
     case UiUpdateType::Mode:
         playMode = static_cast<PlayMode>(update.mode);
@@ -310,12 +312,11 @@ void draw()
     oled.print(line);
 
     // 128 px / 6 px = 21 columns: A:--,--,-- G:--,--,-- fits, real values may clip.
-    if (haveGSensor) {
-        snprintf(line, sizeof(line), "A:%d,%d,%d G:%d,%d,%d",
-                 acc[0], acc[1], acc[2], gyro[0], gyro[1], gyro[2]);
-    } else {
-        snprintf(line, sizeof(line), "A:--,--,-- G:--,--,--");
-    }
+    char accText[24] = "--,--,--";
+    char gyroText[24] = "--,--,--";
+    if (haveAcc) snprintf(accText, sizeof(accText), "%d,%d,%d", acc[0], acc[1], acc[2]);
+    if (haveGyro) snprintf(gyroText, sizeof(gyroText), "%d,%d,%d", gyro[0], gyro[1], gyro[2]);
+    snprintf(line, sizeof(line), "A:%s G:%s", accText, gyroText);
     oled.setCursor(0, STATUS_Y[2]);
     oled.print(line);
 

@@ -15,6 +15,17 @@ constexpr uint32_t BLE_CONNECT_TIMEOUT_MS = 3000;
 constexpr uint32_t BLE_DISCOVERY_TIMEOUT_MS = 10000;
 constexpr uint32_t BLE_RETRY_DELAY_MS = 3000;
 
+// 依序嘗試的感測端 UUID 組合：先 FFF0，找不到再試 524CACC0。
+struct UartUuidSet {
+    const char* service;
+    const char* tx;  // 感測端 notify
+    const char* rx;
+};
+const UartUuidSet UART_UUID_SETS[] = {
+    {"FFF0", "FFF1", "FFF2"},
+    {"524CACC0-3C17-D293-8E48-14FE2E4DA212", "D002", "D001"},
+};
+
 volatile bool targetFound = false;
 bool clientConfigured = false;
 int8_t connID = -1;
@@ -34,6 +45,11 @@ void postUi(const UiUpdateElement& update)
     if (uiUpdateQueue != nullptr) {
         xQueueSend(uiUpdateQueue, &update, 0);
     }
+}
+
+int16_t readInt16BE(const uint8_t* p)
+{
+    return static_cast<int16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
 }
 
 bool sensorConnected()
@@ -114,21 +130,29 @@ bool connectSensor()
     }
     DEBUG_PRINT("\n");
 
-    UartService = client->getService(UART_SERVICE_UUID);
-    if (UartService == nullptr) {
-        dropConnection("UART service not found");
+    const UartUuidSet* uuids = nullptr;
+    for (const UartUuidSet& set : UART_UUID_SETS) {
+        UartService = client->getService(set.service);
+        if (UartService == nullptr) continue;
+        Tx = UartService->getCharacteristic(set.tx);
+        if (Tx != nullptr) {
+            uuids = &set;
+            break;
+        }
+        DEBUG_PRINT("BLE: TX characteristic not found in service ");
+        DEBUG_PRINTLN(set.service);
+    }
+    if (uuids == nullptr) {
+        dropConnection("UART service/TX characteristic not found");
         return false;
     }
-    Tx = UartService->getCharacteristic(CHARACTERISTIC_UUID_TX);
-    if (Tx == nullptr) {
-        dropConnection("TX characteristic not found");
-        return false;
-    }
+    DEBUG_PRINT("BLE: using service ");
+    DEBUG_PRINTLN(uuids->service);
     DEBUG_PRINTLN("TX characteristic found");
     Tx->setBufferLen(STRING_BUF_SIZE);
     Tx->setNotifyCallback(notificationCB);
     Tx->enableNotifyIndicate();
-    Rx = UartService->getCharacteristic(CHARACTERISTIC_UUID_RX);
+    Rx = UartService->getCharacteristic(uuids->rx);
     if (Rx != nullptr) {
         DEBUG_PRINTLN("RX characteristic found");
         Rx->setBufferLen(STRING_BUF_SIZE);
@@ -310,50 +334,68 @@ void BLETask(void* parameter) {
                 // DEBUG_PRINTLN(ppgElement.ppg1);
                 // DEBUG_PRINT("PPG2: ");
                 // DEBUG_PRINTLN(ppgElement.ppg2);
-            } else if (msgType == 0x02) { // G sensor
-                if (msgElement.length < 21) {
-                    DEBUG_PRINTLN("Error: G sensor data length is less than expected");
+            } else if (msgType == 0x02) { // Acc
+                if (msgElement.length < 15) {
+                    DEBUG_PRINTLN("Error: Acc data length is less than expected");
                     continue; // Skip processing for this frame
                 }
-                GSensorElement gSensorElement;
-                gSensorElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
-                gSensorElement.sensor_time_ms = sensor_time_ms;
-                gSensorElement.sequence = sequence;
-                gSensorElement.acc_x = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[9]) << 8) | msgElement.data[10]);
-                gSensorElement.acc_y = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[11]) << 8) | msgElement.data[12]);
-                gSensorElement.acc_z = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[13]) << 8) | msgElement.data[14]);
-                gSensorElement.gyro_x = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[15]) << 8) | msgElement.data[16]);
-                gSensorElement.gyro_y = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[17]) << 8) | msgElement.data[18]);
-                gSensorElement.gyro_z = static_cast<int16_t>((static_cast<uint16_t>(msgElement.data[19]) << 8) | msgElement.data[20]);
-                if (xQueueSend(gSensorQueue, &gSensorElement, 0) == pdPASS) {
-                    DEBUG_PRINT("BLETask -> analysisTask: G sensor sequence=");
-                    DEBUG_PRINTLN(gSensorElement.sequence);
+                AccElement accElement;
+                accElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
+                accElement.sensor_time_ms = sensor_time_ms;
+                accElement.sequence = sequence;
+                accElement.acc_x = readInt16BE(&msgElement.data[9]);
+                accElement.acc_y = readInt16BE(&msgElement.data[11]);
+                accElement.acc_z = readInt16BE(&msgElement.data[13]);
+                if (xQueueSend(accSensorQueue, &accElement, 0) == pdPASS) {
+                    DEBUG_PRINT("BLETask -> analysisTask: Acc sequence=");
+                    DEBUG_PRINTLN(accElement.sequence);
                 } else {
-                    DEBUG_PRINTLN("BLETask -> analysisTask: G sensor queue full");
+                    DEBUG_PRINTLN("BLETask -> analysisTask: Acc queue full");
                 }
-                UiUpdateElement gUpdate{};
-                gUpdate.type = UiUpdateType::GSensor;
-                gUpdate.timestampMs = gSensorElement.hub_rx_time_ms;
-                gUpdate.acc[0] = gSensorElement.acc_x;
-                gUpdate.acc[1] = gSensorElement.acc_y;
-                gUpdate.acc[2] = gSensorElement.acc_z;
-                gUpdate.gyro[0] = gSensorElement.gyro_x;
-                gUpdate.gyro[1] = gSensorElement.gyro_y;
-                gUpdate.gyro[2] = gSensorElement.gyro_z;
-                postUi(gUpdate);
-                DEBUG_PRINTLN("G sensor data received");
-                DEBUG_PRINT("Acc X: ");
-                DEBUG_PRINTLN(gSensorElement.acc_x);
-                DEBUG_PRINT("Acc Y: ");
-                DEBUG_PRINTLN(gSensorElement.acc_y);
-                DEBUG_PRINT("Acc Z: ");
-                DEBUG_PRINTLN(gSensorElement.acc_z);
-                DEBUG_PRINT("Gyro X: ");
-                DEBUG_PRINTLN(gSensorElement.gyro_x);
-                DEBUG_PRINT("Gyro Y: ");
-                DEBUG_PRINTLN(gSensorElement.gyro_y);
-                DEBUG_PRINT("Gyro Z: ");
-                DEBUG_PRINTLN(gSensorElement.gyro_z);
+                UiUpdateElement accUpdate{};
+                accUpdate.type = UiUpdateType::Acc;
+                accUpdate.timestampMs = accElement.hub_rx_time_ms;
+                accUpdate.acc[0] = accElement.acc_x;
+                accUpdate.acc[1] = accElement.acc_y;
+                accUpdate.acc[2] = accElement.acc_z;
+                postUi(accUpdate);
+                DEBUG_PRINT("Acc: ");
+                DEBUG_PRINT(accElement.acc_x);
+                DEBUG_PRINT(", ");
+                DEBUG_PRINT(accElement.acc_y);
+                DEBUG_PRINT(", ");
+                DEBUG_PRINTLN(accElement.acc_z);
+            } else if (msgType == 0x03) { // Gyro
+                if (msgElement.length < 15) {
+                    DEBUG_PRINTLN("Error: Gyro data length is less than expected");
+                    continue; // Skip processing for this frame
+                }
+                GyroElement gyroElement;
+                gyroElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
+                gyroElement.sensor_time_ms = sensor_time_ms;
+                gyroElement.sequence = sequence;
+                gyroElement.gyro_x = readInt16BE(&msgElement.data[9]);
+                gyroElement.gyro_y = readInt16BE(&msgElement.data[11]);
+                gyroElement.gyro_z = readInt16BE(&msgElement.data[13]);
+                if (xQueueSend(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
+                    DEBUG_PRINT("BLETask -> analysisTask: Gyro sequence=");
+                    DEBUG_PRINTLN(gyroElement.sequence);
+                } else {
+                    DEBUG_PRINTLN("BLETask -> analysisTask: Gyro queue full");
+                }
+                UiUpdateElement gyroUpdate{};
+                gyroUpdate.type = UiUpdateType::Gyro;
+                gyroUpdate.timestampMs = gyroElement.hub_rx_time_ms;
+                gyroUpdate.gyro[0] = gyroElement.gyro_x;
+                gyroUpdate.gyro[1] = gyroElement.gyro_y;
+                gyroUpdate.gyro[2] = gyroElement.gyro_z;
+                postUi(gyroUpdate);
+                DEBUG_PRINT("Gyro: ");
+                DEBUG_PRINT(gyroElement.gyro_x);
+                DEBUG_PRINT(", ");
+                DEBUG_PRINT(gyroElement.gyro_y);
+                DEBUG_PRINT(", ");
+                DEBUG_PRINTLN(gyroElement.gyro_z);
             } else {
                 DEBUG_PRINTLN("Unknown msgType received");
                 continue; // Skip processing for unknown msgType

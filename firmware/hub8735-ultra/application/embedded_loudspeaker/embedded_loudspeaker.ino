@@ -16,7 +16,8 @@ static TaskHandle_t UITaskHandle = nullptr;
 
 QueueHandle_t bleRxFrameQueue = nullptr;
 QueueHandle_t ppgSensorQueue = nullptr;
-QueueHandle_t gSensorQueue = nullptr;
+QueueHandle_t accSensorQueue = nullptr;
+QueueHandle_t gyroSensorQueue = nullptr;
 QueueHandle_t targetBpmResultQueue = nullptr;
 QueueHandle_t audioCmdQueue = nullptr;
 QueueHandle_t audioPlaybackEventQueue = nullptr;
@@ -25,6 +26,7 @@ QueueHandle_t bleTxQueue = nullptr;
 QueueHandle_t uiCmdQueue = nullptr;
 
 UserInfo userInfo;
+volatile bool musicLibraryReady = false;
 
 void setup()
 {
