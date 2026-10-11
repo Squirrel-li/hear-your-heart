@@ -27,6 +27,8 @@ bool appQueuesInit();
 // 啟動流程：audioTask 先初始化 SD 並載入 musicLibrary，之後才設為 true；
 // controlTask 等到 true 才開始選曲，避免讀到載入中的曲目表。
 extern volatile bool musicLibraryReady;
+extern volatile bool musicStorageReady;
+extern volatile bool musicBpmAnalysisBusy;
 
 struct UserInfo {
     int age;
@@ -119,7 +121,9 @@ enum class AudioCommandType : uint8_t {
     Stop,
     Pause,
     Resume,
-    SetVolume
+    SetVolume,
+    AnalyzeNewOrUnknownBpm,
+    ReanalyzeAllBpm
 };
 
 struct AudioCmdElement {
@@ -139,7 +143,8 @@ enum class UiUpdateType : uint8_t {
     Error,
     Acc,
     Gyro,
-    Mode
+    Mode,
+    BpmAnalysis
 };
 
 // Enjoy and Train are both automatic (heart-rate driven) selection for now.
@@ -158,6 +163,20 @@ enum class AudioState : uint8_t {
 
 // Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleConnected; Acc: acc; Gyro: gyro;
 // Audio: audioState and, when a new file starts, filename; Mode: mode
+enum class BpmAnalysisMode : uint8_t {
+    NewOrUnknown,
+    All
+};
+
+enum class BpmAnalysisState : uint8_t {
+    Idle,
+    Queued,
+    Running,
+    Complete,
+    Failed,
+    Cancelled
+};
+
 struct UiUpdateElement {
     UiUpdateType type;
     uint32_t timestampMs;
@@ -170,6 +189,12 @@ struct UiUpdateElement {
     uint8_t bleConnected;
     uint8_t mode;        // PlayMode
     uint8_t audioState;  // AudioState
+    BpmAnalysisState bpmAnalysisState;
+    BpmAnalysisMode bpmAnalysisMode;
+    uint8_t bpmAnalysisCurrent;
+    uint8_t bpmAnalysisTotal;
+    uint8_t bpmAnalysisSucceeded;
+    uint8_t bpmAnalysisFailed;
     int16_t acc[3];
     int16_t gyro[3];
     char filename[AUDIO_FILENAME_MAX];
@@ -181,7 +206,9 @@ enum class UiCommandType : uint8_t {
     Pause,
     Resume,
     Stop,
-    SetVolume
+    SetVolume,
+    AnalyzeNewOrUnknownBpm,
+    ReanalyzeAllBpm
 };
 
 struct UiCommandElement {

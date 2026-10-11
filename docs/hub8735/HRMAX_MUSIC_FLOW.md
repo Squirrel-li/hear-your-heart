@@ -8,7 +8,8 @@
 | `BLETask` | 穿戴端 BLE PPG 封包 | 解出 `PpgSensorElement`（含狀態、心率、接收時間），送入 `ppgSensorQueue` |
 | `analysisTask` | `userInfo.age`、最新有效 PPG（`status == 2`、心率非 0） | 算出 HRmax、穩定 Zone 與目標歌曲 BPM；變化時覆寫 `targetBpmResultQueue` 的最新結果 |
 | `controlTask` | 目標 BPM 結果、播放事件、曲目 BPM 表、序列埠控制 | 依目標 BPM 選曲並把 `Play(filename)` 命令送到 `audioCmdQueue`；手動控制優先 |
-| `audioTask` | `audioCmdQueue`、SD 卡 MP3 | 唯一呼叫 MAX98357 播放 API 的 task；回報自動歌曲播畢或播放失敗 |
+| UITask | OLED 按鍵、uiUpdateQueue | 顯示 BPM 分析選單與排隊、分析中、完成摘要；透過 uiCmdQueue 傳送操作 |
+| audioTask | audioCmdQueue、SD 卡 MP3 | 唯一呼叫 MAX98357 的 task，也是 SD 唯一擁有者；歌曲停止時執行 BPM 掃描與分析，回報播放與分析狀態 |
 
 `analysisTask` 只送目標 BPM 結果，不操作播放裝置。`controlTask` 預設自動選曲；序列埠 `play/stop/pause/resume` 會切到手動控制，只有輸入 `auto` 才恢復感測器自動選曲。`volume` 不改變播放模式。`audioTask` 是唯一呼叫 MP3 播放 API 的 task，並用 `audioPlaybackEventQueue` 回報自動歌曲播畢或播放失敗。
 
@@ -26,7 +27,7 @@
 
 ## 選歌與切歌
 
-曲目表在 `song_catalog.h`，共 16 首，檔名為 `bpmNNN.mp3`（NNN 為 BPM），依 BPM 由低到高的順序循環。符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。
+曲目 metadata 從 SD 卡根目錄的 music_library.json 載入至 musicLibrary；song_catalog.h 負責 BPM 選曲。SD 範例清單有 16 首，容量上限 32 首；符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。BPM 為 0 的未分析曲目不參加自動選曲。
 
 - 首次選歌、穩定 Zone 切換：`controlTask` 從目前歌曲的下一首起依序找符合曲目；Zone 切換確認後立即送播放命令。完全沒有符合曲目時播放 BPM 最近的一首。若結果仍是目前歌曲，維持播放。
 - 同一 Zone 內目標 BPM 改變：目前歌曲繼續播完，播畢後用最新目標選下一首。
@@ -34,6 +35,14 @@
 - 播放失敗：`audioTask` 回報失敗曲目索引，`controlTask` 跳過該曲並嘗試下一首；所有曲目都失敗時停止自動播放。
 - PPG 無效或暫時失聯：不更新目標 BPM，也不確認新的 Zone；目前歌曲繼續播放。
 
+## OLED 手動 BPM 分析
+
+- 主選單的 BPM Analysis 子選單有 New / unknown BPM 與 Reanalyze all BPM。
+- 掃描只由使用者啟動。controlTask 轉送請求；audioTask 在歌曲停止後掃描 SD 並呼叫 music_bpm_analyzer，不新增 FreeRTOS task，也不在 analysisTask 執行。
+- 若請求時正在播放或暫停，工作排隊；播放命令優先，分析於目前曲目停止後開始。分析以 Helix 解碼 MP3、混成單聲道 PCM，分段送入 MiniBPM；最多分析 60 秒，少於 8 秒或沒有有效估計就算失敗。
+- 新檔／未知 BPM 包含未列入清單、BPM 為 0、缺少舊檔案資訊，或檔案大小／FAT 修改時間有變更的曲目。BPM 為 0 的曲目不參加自動選曲。分析成功後以整數 BPM 更新清單；失敗曲目不阻擋其他曲目。
+- 取代檔案依大小與 FAT 修改時間判斷。相同大小和時間戳記的內容替換可能漏檢；若需嚴格保證，應升級為內容指紋比對。
+- BPM 分析選單只分析 BPM，不執行 NPU 曲風分類。
 ## 離線 BPM 估計
 
 原有 10 首（`testdata/audio` 的 `music1`～`music10`）用 FFmpeg 將 MP3 解碼，對各曲目前約 180 秒的音訊做頻譜起音強度與自相關分析，再檢查三段各 60 秒的候選節拍。另 6 首是 FMA 資料集（fma_small，CC BY-NC-SA）的 30 秒片段，BPM 取自 Echonest 的 `tempo`（四捨五入，未在此量測）。這些數值都是**估計值**，節奏可能有半拍／雙拍解讀；換 SD 卡曲目或進行正式展示前，應人工核對。

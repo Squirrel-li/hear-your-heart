@@ -6,6 +6,9 @@
 
 namespace {
 
+constexpr const char* TAG = "UI";
+uint32_t droppedCommands = 0;
+
 // OLED on Wire (I2C0: SDA=D3/PE4, SCL=D4/PE3).
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 
@@ -34,17 +37,21 @@ enum TopItem : uint8_t {
     TopPlay,
     TopStop,
     TopVolume,
+    TopBpmAnalysis,
     TopCount
 };
 
-// Top: the four items. ModeList / VolumeList: pick a value with OK, which also leaves the list.
+// Top: mode, play/pause, stop, volume, and BPM analysis. ModeList / VolumeList: pick a value with OK, which also leaves the list.
 enum class Screen : uint8_t {
     Top,
     ModeList,
-    VolumeList
+    VolumeList,
+    BpmAnalysisList,
+    BpmStatus
 };
 
 constexpr uint8_t MODE_COUNT = 3;
+constexpr uint8_t BPM_ANALYSIS_COUNT = 2;
 constexpr uint8_t VOLUME_STEP = 10;
 constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
 
@@ -69,6 +76,13 @@ char nowPlaying[AUDIO_FILENAME_MAX] = "";
 // ponytail: Volume is mirrored from menu changes only; the serial "volume" command
 // can make it differ. Have audioTask report the volume if that matters.
 uint8_t volumePercent = 50;  // audioTask starts at 50%
+BpmAnalysisState bpmAnalysisState = BpmAnalysisState::Idle;
+BpmAnalysisMode bpmAnalysisMode = BpmAnalysisMode::NewOrUnknown;
+uint8_t bpmAnalysisCurrent = 0;
+uint8_t bpmAnalysisTotal = 0;
+uint8_t bpmAnalysisSucceeded = 0;
+uint8_t bpmAnalysisFailed = 0;
+char bpmAnalysisFile[AUDIO_FILENAME_MAX] = "";
 
 uint32_t lastRefreshMs = 0;
 
@@ -96,10 +110,11 @@ uint8_t itemCount()
     switch (screen) {
     case Screen::ModeList: return MODE_COUNT;
     case Screen::VolumeList: return VOLUME_COUNT;
+    case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
+    case Screen::BpmStatus: return MENU_ROWS;
     default: return TopCount;
     }
 }
-
 // True once on the sample that completes a stable press (40 ms debounce).
 bool buttonPressed(Button& b)
 {
@@ -112,19 +127,49 @@ bool buttonPressed(Button& b)
     return false;
 }
 
-void sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy)
+const char* screenName(Screen value)
+{
+    switch (value) {
+    case Screen::Top: return "Top";
+    case Screen::ModeList: return "ModeList";
+    case Screen::VolumeList: return "VolumeList";
+    case Screen::BpmAnalysisList: return "BpmAnalysisList";
+    case Screen::BpmStatus: return "BpmStatus";
+    }
+    return "?";
+}
+
+const char* topItemName(uint8_t item)
+{
+    switch (item) {
+    case TopMode: return "Mode";
+    case TopPlay: return "Play/Pause";
+    case TopStop: return "Stop";
+    case TopVolume: return "Volume";
+    case TopBpmAnalysis: return "BPM analysis";
+    }
+    return "?";
+}
+
+bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy)
 {
     UiCommandElement command{};
     command.command = type;
     command.volumePercent = volume;
     command.mode = mode;
     if (uiCmdQueue == nullptr || xQueueSend(uiCmdQueue, &command, 0) != pdPASS) {
-        DEBUG_PRINTLN("UITask: control command queue full");
+        ++droppedCommands;
+        LOGW(TAG, "control command queue full; command %d dropped (total dropped %lu)", static_cast<int>(type),
+             static_cast<unsigned long>(droppedCommands));
+        return false;
     }
+    LOGD(TAG, "-> control: command %d (volume=%u mode=%s)", static_cast<int>(type), static_cast<unsigned>(volume),
+         modeName(mode));
+    return true;
 }
-
 void openList(Screen list, uint8_t selected)
 {
+    LOGD(TAG, "screen %s -> %s (cursor %u)", screenName(screen), screenName(list), static_cast<unsigned>(selected));
     screen = list;
     cursor = selected;
     menuTop = 0;
@@ -132,6 +177,7 @@ void openList(Screen list, uint8_t selected)
 
 void backToTop(TopItem item)
 {
+    LOGD(TAG, "screen %s -> Top (cursor %s)", screenName(screen), topItemName(item));
     screen = Screen::Top;
     cursor = item;
     menuTop = 0;
@@ -139,6 +185,8 @@ void backToTop(TopItem item)
 
 void activateItem()
 {
+    LOGI(TAG, "OK pressed: screen=%s cursor=%u%s%s", screenName(screen), static_cast<unsigned>(cursor),
+         screen == Screen::Top ? " item=" : "", screen == Screen::Top ? topItemName(cursor) : "");
     switch (screen) {
     case Screen::ModeList:
         sendCommand(UiCommandType::SetMode, 0, static_cast<PlayMode>(cursor));
@@ -146,6 +194,33 @@ void activateItem()
         break;
     case Screen::VolumeList:
         backToTop(TopVolume);
+        break;
+    case Screen::BpmAnalysisList: {
+        const bool newOrUnknown = cursor == 0;
+        const UiCommandType command = newOrUnknown
+            ? UiCommandType::AnalyzeNewOrUnknownBpm
+            : UiCommandType::ReanalyzeAllBpm;
+        bpmAnalysisMode = newOrUnknown
+            ? BpmAnalysisMode::NewOrUnknown
+            : BpmAnalysisMode::All;
+        LOGI(TAG, "BPM analysis requested from menu: %s", newOrUnknown ? "new/unknown" : "reanalyze all");
+        bpmAnalysisState = BpmAnalysisState::Queued;
+        bpmAnalysisCurrent = 0;
+        bpmAnalysisTotal = 0;
+        bpmAnalysisSucceeded = 0;
+        bpmAnalysisFailed = 0;
+        bpmAnalysisFile[0] = 0;
+        if (!sendCommand(command)) {
+            bpmAnalysisState = BpmAnalysisState::Failed;
+            bpmAnalysisFailed = 1;
+        }
+        screen = Screen::BpmStatus;
+        cursor = 0;
+        menuTop = 0;
+        break;
+    }
+    case Screen::BpmStatus:
+        backToTop(TopBpmAnalysis);
         break;
     default:
         switch (cursor) {
@@ -162,6 +237,17 @@ void activateItem()
         case TopVolume:
             openList(Screen::VolumeList, 0);
             break;
+        case TopBpmAnalysis:
+            if (bpmAnalysisState == BpmAnalysisState::Queued ||
+                bpmAnalysisState == BpmAnalysisState::Running) {
+                LOGD(TAG, "BPM analysis already active; showing status");
+                screen = Screen::BpmStatus;
+                cursor = 0;
+                menuTop = 0;
+            } else {
+                openList(Screen::BpmAnalysisList, 0);
+            }
+            break;
         }
         break;
     }
@@ -171,37 +257,61 @@ void applyUpdate(const UiUpdateElement& update)
 {
     switch (update.type) {
     case UiUpdateType::Ble:
+        if (bleConnected != (update.bleConnected != 0)) {
+            LOGI(TAG, "BLE link shown as %s", update.bleConnected ? "connected" : "scanning");
+        }
         bleConnected = update.bleConnected != 0;
         break;
     case UiUpdateType::Sensor:
+        LOGT(TAG, "update: HR=%u SpO2=%u status=%u", static_cast<unsigned>(update.heartRateBpm),
+             static_cast<unsigned>(update.spo2), static_cast<unsigned>(update.sensorStatus));
         havePpg = true;
         heartRate = update.heartRateBpm;
         spo2 = update.spo2;
         ppgStatus = update.sensorStatus;
         break;
     case UiUpdateType::Acc:
+        LOGT(TAG, "update: Acc %d,%d,%d", update.acc[0], update.acc[1], update.acc[2]);
         haveAcc = true;
         for (uint8_t i = 0; i < 3; i++) acc[i] = update.acc[i];
         break;
     case UiUpdateType::Gyro:
+        LOGT(TAG, "update: Gyro %d,%d,%d", update.gyro[0], update.gyro[1], update.gyro[2]);
         haveGyro = true;
         for (uint8_t i = 0; i < 3; i++) gyro[i] = update.gyro[i];
         break;
     case UiUpdateType::Mode:
+        LOGI(TAG, "mode shown: %s", modeName(static_cast<PlayMode>(update.mode)));
         playMode = static_cast<PlayMode>(update.mode);
         break;
     case UiUpdateType::Audio:
+        LOGD(TAG, "audio state=%u file=%s", static_cast<unsigned>(update.audioState), update.filename);
         audioState = static_cast<AudioState>(update.audioState);
-        if (update.filename[0] != '\0') {
+        if (update.filename[0] != 0) {
             memcpy(nowPlaying, update.filename, sizeof(nowPlaying));
-            nowPlaying[sizeof(nowPlaying) - 1] = '\0';
+            nowPlaying[sizeof(nowPlaying) - 1] = 0;
+        }
+        break;
+    case UiUpdateType::BpmAnalysis:
+        LOGD(TAG, "BPM analysis update: state=%u %u/%u ok=%u fail=%u %s", static_cast<unsigned>(update.bpmAnalysisState),
+             static_cast<unsigned>(update.bpmAnalysisCurrent), static_cast<unsigned>(update.bpmAnalysisTotal),
+             static_cast<unsigned>(update.bpmAnalysisSucceeded), static_cast<unsigned>(update.bpmAnalysisFailed),
+             update.filename);
+        bpmAnalysisState = update.bpmAnalysisState;
+        bpmAnalysisMode = update.bpmAnalysisMode;
+        bpmAnalysisCurrent = update.bpmAnalysisCurrent;
+        bpmAnalysisTotal = update.bpmAnalysisTotal;
+        bpmAnalysisSucceeded = update.bpmAnalysisSucceeded;
+        bpmAnalysisFailed = update.bpmAnalysisFailed;
+        if (update.filename[0] != 0) {
+            strncpy(bpmAnalysisFile, update.filename, sizeof(bpmAnalysisFile) - 1);
+            bpmAnalysisFile[sizeof(bpmAnalysisFile) - 1] = 0;
         }
         break;
     default:
         break;
     }
 }
-
 void itemLabel(uint8_t item, char* out, size_t size)
 {
     switch (screen) {
@@ -212,6 +322,40 @@ void itemLabel(uint8_t item, char* out, size_t size)
     case Screen::VolumeList:
         snprintf(out, size, "Volume %u%%%s", item * VOLUME_STEP,
                  item * VOLUME_STEP == volumePercent ? " *" : "");
+        return;
+    case Screen::BpmAnalysisList:
+        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : "Reanalyze all BPM");
+        return;
+    case Screen::BpmStatus:
+        switch (item) {
+        case 0:
+            snprintf(out, size, "BPM: %s",
+                     bpmAnalysisState == BpmAnalysisState::Queued ? "Queued" :
+                     bpmAnalysisState == BpmAnalysisState::Running ? "Analyzing" :
+                     bpmAnalysisState == BpmAnalysisState::Complete ? "Complete" :
+                     bpmAnalysisState == BpmAnalysisState::Failed ? "Failed" :
+                     bpmAnalysisState == BpmAnalysisState::Cancelled ? "Cancelled" : "Idle");
+            break;
+        case 1:
+            if (bpmAnalysisState == BpmAnalysisState::Queued)
+                snprintf(out, size, "Starting...");
+            else if (bpmAnalysisState == BpmAnalysisState::Cancelled)
+                snprintf(out, size, "Stop audio first");
+            else if (bpmAnalysisState == BpmAnalysisState::Complete ||
+                     bpmAnalysisState == BpmAnalysisState::Failed)
+                snprintf(out, size, "OK %u  Fail %u",
+                         bpmAnalysisSucceeded, bpmAnalysisFailed);
+            else
+                snprintf(out, size, "File %u / %u",
+                         bpmAnalysisCurrent, bpmAnalysisTotal);
+            break;
+        case 2:
+            snprintf(out, size, "%.21s", bpmAnalysisFile);
+            break;
+        default:
+            snprintf(out, size, "OK: Back");
+            break;
+        }
         return;
     default:
         break;
@@ -232,12 +376,19 @@ void itemLabel(uint8_t item, char* out, size_t size)
     case TopVolume:
         snprintf(out, size, "Volume: %u%%", volumePercent);
         break;
+    case TopBpmAnalysis:
+        if (bpmAnalysisState == BpmAnalysisState::Queued)
+            snprintf(out, size, "BPM: queued");
+        else if (bpmAnalysisState == BpmAnalysisState::Running)
+            snprintf(out, size, "BPM: running");
+        else
+            snprintf(out, size, "BPM Analysis");
+        break;
     default:
-        out[0] = '\0';
+        out[0] = 0;
         break;
     }
 }
-
 // The board has no RTC/NTP, so the time shown is sys_ms since boot (millis()),
 // same "mmMssS" format as the BM7701 sensor OLED. Minutes wrap at 100.
 uint32_t clockSeconds()
@@ -333,13 +484,15 @@ void draw()
 void UITask(void* parameter) {
     (void)parameter;
 
+    LOGI(TAG, "started; buttons up=D%u down=D%u ok=D%u (INPUT_PULLUP)", static_cast<unsigned>(PIN_UP),
+         static_cast<unsigned>(PIN_DOWN), static_cast<unsigned>(PIN_OK));
     for (Button& b : buttons) pinMode(b.pin, INPUT_PULLUP);
 
     if (!oled.begin()) {
-        DEBUG_PRINTLN("UITask: OLED (SH1106) not found on Wire, UI disabled");
+        LOGE(TAG, "OLED (SH1106 @0x%02X) not found on Wire (D3/D4); UI disabled, task exits", OLED_ADDRESS);
         vTaskDelete(nullptr);
     }
-    DEBUG_PRINTLN("UITask: OLED initialized");
+    LOGI(TAG, "OLED initialized (128x64, refresh %lu ms)", static_cast<unsigned long>(REFRESH_MS));
 
     bool dirty = true;
     uint32_t lastDrawMs = 0;
@@ -347,18 +500,24 @@ void UITask(void* parameter) {
     for (;;) {
         const bool upPressed = buttonPressed(buttons[0]);
         const bool downPressed = buttonPressed(buttons[1]);
+        if (upPressed || downPressed) {
+            LOGD(TAG, "button %s pressed (screen=%s cursor=%u)", upPressed ? "UP" : "DOWN", screenName(screen),
+                 static_cast<unsigned>(cursor));
+        }
         if (screen == Screen::VolumeList) {
             if (upPressed && volumePercent < 100) {
                 volumePercent += VOLUME_STEP;
+                LOGI(TAG, "volume -> %u%%", static_cast<unsigned>(volumePercent));
                 sendCommand(UiCommandType::SetVolume, volumePercent);
                 dirty = true;
             }
             if (downPressed && volumePercent > 0) {
                 volumePercent -= VOLUME_STEP;
+                LOGI(TAG, "volume -> %u%%", static_cast<unsigned>(volumePercent));
                 sendCommand(UiCommandType::SetVolume, volumePercent);
                 dirty = true;
             }
-        } else {
+        } else if (screen != Screen::BpmStatus) {
             if (upPressed) {
                 cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
                 dirty = true;
@@ -367,8 +526,7 @@ void UITask(void* parameter) {
                 cursor = cursor + 1 >= itemCount() ? 0 : cursor + 1;
                 dirty = true;
             }
-        }
-        if (buttonPressed(buttons[2])) {
+        }        if (buttonPressed(buttons[2])) {
             activateItem();
             dirty = true;
         }
@@ -388,6 +546,7 @@ void UITask(void* parameter) {
             dirty = true;
         }
         if (dirty &&(uint32_t)(now - lastDrawMs) >= REDRAW_MS) {
+            LOGT(TAG, "redraw (screen=%s cursor=%u)", screenName(screen), static_cast<unsigned>(cursor));
             draw();
             dirty = false;
             lastDrawMs = millis();
