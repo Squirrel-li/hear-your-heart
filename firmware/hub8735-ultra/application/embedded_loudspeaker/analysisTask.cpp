@@ -91,7 +91,8 @@ void analysisTask(void* parameter)
     TargetBpmState bpmState{hrmaxBpm, 0};
     HeartZoneState zoneState{};
     PpgSensorElement latest{};
-    GSensorElement gSensorElement{};
+    AccElement accElement{};
+    GyroElement gyroElement{};
     bool haveValidPpg = false;
     bool haveUpdatedBpm = false;
     uint32_t lastBpmUpdateMs = 0;
@@ -146,9 +147,13 @@ void analysisTask(void* parameter)
             zoneState.pending = 0; // Stale sensor data cannot confirm a Zone change.
         }
 
-        if (xQueueReceive(gSensorQueue, &gSensorElement, 0) == pdPASS) {
-            DEBUG_PRINT("BLETask -> analysisTask [recv]: G sensor sequence=");
-            DEBUG_PRINTLN(gSensorElement.sequence);
+        if (xQueueReceive(accSensorQueue, &accElement, 0) == pdPASS) {
+            DEBUG_PRINT("BLETask -> analysisTask [recv]: Acc sequence=");
+            DEBUG_PRINTLN(accElement.sequence);
+        }
+        if (xQueueReceive(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
+            DEBUG_PRINT("BLETask -> analysisTask [recv]: Gyro sequence=");
+            DEBUG_PRINTLN(gyroElement.sequence);
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     }

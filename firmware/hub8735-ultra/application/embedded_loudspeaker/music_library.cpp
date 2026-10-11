@@ -23,7 +23,7 @@ bool musicLibraryLoad(AmebaFatFS& fs)
     char path[64];
     if (!libraryPath(fs, MUSIC_LIBRARY_FILE, path, sizeof(path))) return false;
     if (!fs.exists(path)) {
-        DEBUG_PRINTLN("Music library: file not found, starting empty");
+        DEBUG_PRINTLN("Error: music_library.json not found on SD card, music library is empty");
         return false;
     }
 
@@ -31,20 +31,20 @@ bool musicLibraryLoad(AmebaFatFS& fs)
     const uint32_t size = file.size();
     if (!file || size == 0 || size >= sizeof(jsonBuf)) {
         file.close();
-        DEBUG_PRINTLN("Music library: unreadable or too large");
+        DEBUG_PRINTLN("Error: music_library.json is unreadable or too large, music library is empty");
         return false;
     }
     const int got = file.read(jsonBuf, size);
     file.close();
     if (got != (int)size) {
-        DEBUG_PRINTLN("Music library: read failed");
+        DEBUG_PRINTLN("Error: music_library.json read failed, music library is empty");
         return false;
     }
     jsonBuf[size] = '\0';
 
     if (!music_json::parse(jsonBuf, musicLibrary)) {
         musicLibrary.count = 0;
-        DEBUG_PRINTLN("Music library: invalid JSON, starting empty");
+        DEBUG_PRINTLN("Error: music_library.json parse failed, music library is empty");
         return false;
     }
     DEBUG_PRINT("Music library: loaded songs=");

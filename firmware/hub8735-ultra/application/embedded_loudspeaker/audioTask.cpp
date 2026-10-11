@@ -133,12 +133,14 @@ void audioTask(void* parameter)
 
     if (!fs.begin()) {
         DEBUG_PRINTLN("SD card initialization failed");
+        musicLibraryReady = true;  // 曲目表為空，不阻擋 controlTask
         for (;;) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
     DEBUG_PRINTLN("SD card initialized successfully");
-    musicLibraryLoad(fs);  // 缺檔或格式錯誤只記錄；目前選曲仍使用 song_catalog.h
+    musicLibraryLoad(fs);
+    musicLibraryReady = true;  // 缺檔或格式錯誤時曲目表為空，自動選曲不會播放
 
     if (!amp.begin()) {
         DEBUG_PRINTLN("MAX98357 initialization failed");

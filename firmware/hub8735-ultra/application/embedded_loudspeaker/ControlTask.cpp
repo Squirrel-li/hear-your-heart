@@ -13,7 +13,7 @@ uint16_t targetBpm = 0;
 uint8_t activeZone = 0;
 int currentSong = -1;
 bool automaticSongActive = false;
-uint16_t failedSongMask = 0;
+uint32_t failedSongMask = 0;
 bool initialSelectionAttempted = false;
 bool pendingAutoPlay = false;
 bool pendingAfterFinish = false;
@@ -77,7 +77,7 @@ void selectSongForTarget(bool afterFinish)
     command.command = AudioCommandType::Play;
     command.isAutomatic = 1;
     command.songIndex = static_cast<int8_t>(selected);
-    strncpy(command.filename, songs[selected].filename,
+    strncpy(command.filename, musicLibrary.entries[selected].file,
             sizeof(command.filename) - 1);
 
     if (sendAudioCommand(command)) {
@@ -85,9 +85,9 @@ void selectSongForTarget(bool afterFinish)
         automaticSongActive = true;
         pendingAutoPlay = false;
         DEBUG_PRINT("Auto selected: ");
-        DEBUG_PRINT(songs[selected].filename);
+        DEBUG_PRINT(musicLibrary.entries[selected].file);
         DEBUG_PRINT(" (");
-        DEBUG_PRINT(songs[selected].bpm);
+        DEBUG_PRINT(musicLibrary.entries[selected].bpm);
         DEBUG_PRINTLN(" BPM)");
     } else {
         pendingAutoPlay = true;
@@ -114,12 +114,12 @@ void updateTarget(const TargetBpmResult& result)
 void handlePlaybackEvent(const AudioPlaybackEvent& event)
 {
     if (!automaticMode || event.songIndex < 0 ||
-        event.songIndex >= songCount) {
+        event.songIndex >= static_cast<int>(musicLibrary.count)) {
         return;
     }
 
     if (event.type == AudioPlaybackEventType::Failed) {
-        failedSongMask |= static_cast<uint16_t>(1u << event.songIndex);
+        failedSongMask |= (1u << event.songIndex);
         if (event.songIndex == currentSong) {
             automaticSongActive = false;
             selectSongForTarget(false);
@@ -243,6 +243,9 @@ void controlTask(void* parameter)
     (void)parameter;
 
     reportMode();
+    while (!musicLibraryReady) {  // 佇列會先緩衝，載入完成後再處理
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     for (;;) {
         TargetBpmResult result{};
         while (targetBpmResultQueue != nullptr &&
