@@ -26,7 +26,7 @@ static int nextMatchingSong(uint16_t targetBpm, int currentSong,
     if (targetBpm == 0 || musicLibrary.count == 0) return -1;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
         const int index = (currentSong + step) % static_cast<int>(musicLibrary.count);
-        if (songUnavailable(index, unavailableMask)) continue;
+        if (songUnavailable(index, unavailableMask) || musicLibrary.entries[index].bpm == 0) continue;
         if (bpmDistance(musicLibrary.entries[index].bpm, targetBpm) * 100u <=
             (uint32_t)targetBpm * 5u) return index;
     }
@@ -42,7 +42,7 @@ static int closestSong(uint16_t targetBpm, int currentSong,
     uint32_t bestDistance = UINT32_MAX;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
         const int index = (currentSong + step) % static_cast<int>(musicLibrary.count);
-        if (songUnavailable(index, unavailableMask)) continue;
+        if (songUnavailable(index, unavailableMask) || musicLibrary.entries[index].bpm == 0) continue;
         const uint32_t distance = bpmDistance(musicLibrary.entries[index].bpm, targetBpm);
         if (distance < bestDistance) {
             best = index;
@@ -65,7 +65,10 @@ static int songAfterFinish(uint16_t targetBpm, int currentSong,
     const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask);
     return matching >= 0
         ? matching
-        : currentSong >= 0 && !songUnavailable(currentSong, unavailableMask)
+        : currentSong >= 0 &&
+          currentSong < static_cast<int>(musicLibrary.count) &&
+          musicLibrary.entries[currentSong].bpm != 0 &&
+          !songUnavailable(currentSong, unavailableMask)
             ? currentSong
             : closestSong(targetBpm, currentSong, unavailableMask);
 }
@@ -100,6 +103,9 @@ int main(void)
     assert(nextMatchingSong(171, -1) == 15);
     assert(songAfterFinish(70, 4) == 4);
     assert(songAfterFinish(135, 4) == 9);
+    const char* unknown = "{\"songs\":[{\"file\":\"unknown.mp3\"}]}";
+    assert(music_json::parse(unknown, musicLibrary));
+    assert(songForStart(100, -1) == -1);  // Unknown BPM is not selectable.
     return 0;
 }
 #endif

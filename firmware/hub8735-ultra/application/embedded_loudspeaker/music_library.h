@@ -10,12 +10,14 @@ constexpr const char* MUSIC_LIBRARY_FILE = "music_library.json";
 constexpr size_t MUSIC_LIBRARY_MAX = 32;
 constexpr size_t MUSIC_FILE_MAX = 32;
 constexpr size_t MUSIC_GENRE_MAX = 16;
-constexpr size_t MUSIC_LIBRARY_JSON_MAX = 3072;  // 32 筆 * 約 80 B 的上限
+constexpr size_t MUSIC_LIBRARY_JSON_MAX = 5120;  // Includes per-file size and timestamp metadata.
 
 struct MusicEntry {
     char file[MUSIC_FILE_MAX];
     char genre[MUSIC_GENRE_MAX];
-    uint16_t bpm;
+    uint16_t bpm;  // 0 means not analyzed or no valid estimate.
+    uint32_t fileSize;
+    uint32_t fileModified;  // Packed FAT date/time; 0 means unknown.
 };
 
 struct MusicLibrary {
@@ -58,13 +60,15 @@ inline const char* parseString(const char* p, char* out, size_t cap)
     return p + 1;
 }
 
-inline const char* parseUint(const char* p, uint32_t& value)
+inline const char* parseUint(const char* p, uint32_t& value,
+                             uint32_t maxValue = 100000)
 {
     if (*p < '0' || *p > '9') return nullptr;
     uint32_t v = 0;
     while (*p >= '0' && *p <= '9') {
-        v = v * 10 + (uint32_t)(*p - '0');
-        if (v > 100000) return nullptr;
+        const uint32_t digit = (uint32_t)(*p - '0');
+        if (v > (maxValue - digit) / 10u) return nullptr;
+        v = v * 10u + digit;
         ++p;
     }
     value = v;
@@ -76,14 +80,14 @@ inline bool validEntry(const MusicEntry& e)
     const size_t len = strlen(e.file);
     if (len < 5 || strcmp(e.file + len - 4, ".mp3") != 0) return false;
     if (strpbrk(e.file, "/\\") != nullptr) return false;
-    return e.bpm >= 30 && e.bpm <= 300;
+    return e.bpm == 0 || (e.bpm >= 30 && e.bpm <= 300);
 }
 
 // 解析一個曲目物件，p 指向 '{'。
 inline const char* parseEntry(const char* p, MusicEntry& e)
 {
     memset(&e, 0, sizeof(e));
-    bool hasFile = false, hasBpm = false;
+    bool hasFile = false, hasSize = false, hasModified = false;
     p = skipWs(p + 1);
     while (*p != '}') {
         char key[16];
@@ -102,8 +106,13 @@ inline const char* parseEntry(const char* p, MusicEntry& e)
             p = parseUint(p, bpm);
             if (p == nullptr || bpm > 0xFFFF) return nullptr;
             e.bpm = (uint16_t)bpm;
-            hasBpm = true;
-        } else {  // 未知欄位：略過字串或整數值
+        } else if (strcmp(key, "size") == 0) {
+            p = parseUint(p, e.fileSize, 0xFFFFFFFFu);
+            hasSize = true;
+        } else if (strcmp(key, "modified") == 0) {
+            p = parseUint(p, e.fileModified, 0xFFFFFFFFu);
+            hasModified = true;
+        } else {  // Unknown fields: ignore string or integer values.
             char skip[MUSIC_FILE_MAX];
             uint32_t n;
             p = *p == '"' ? parseString(p, skip, sizeof(skip)) : parseUint(p, n);
@@ -113,7 +122,8 @@ inline const char* parseEntry(const char* p, MusicEntry& e)
         if (*p == ',') p = skipWs(p + 1);
         else if (*p != '}') return nullptr;
     }
-    if (!hasFile || !hasBpm || !validEntry(e)) return nullptr;
+    // Legacy entries without BPM load as unknown; file identity fields must be paired.
+    if (!hasFile || hasSize != hasModified || !validEntry(e)) return nullptr;
     return p + 1;
 }
 
@@ -173,21 +183,24 @@ inline size_t format(const MusicLibrary& lib, char* out, size_t cap)
         n += (size_t)w;
         return true;
     };
-    if (!put("{\"version\":1,\"songs\":[", "", 0)) return 0;
+    if (!put("{\"version\":2,\"songs\":[", "", 0)) return 0;
     for (size_t i = 0; i < lib.count; ++i) {
         const MusicEntry& e = lib.entries[i];
-        if (strpbrk(e.file, "\"\\") || strpbrk(e.genre, "\"\\")) return 0;
+        if (!validEntry(e) || strpbrk(e.file, "\"\\") ||
+            strpbrk(e.genre, "\"\\")) return 0;
         char head[MUSIC_FILE_MAX + 24];
         snprintf(head, sizeof(head), "%s{\"file\":\"%s\",", i ? "," : "", e.file);
         if (!put("%s", head, 0)) return 0;
-        char tail[MUSIC_GENRE_MAX + 24];
-        snprintf(tail, sizeof(tail), "\"bpm\":%u,\"genre\":\"%s\"}", (unsigned)e.bpm, e.genre);
+        char tail[MUSIC_GENRE_MAX + 80];
+        snprintf(tail, sizeof(tail),
+                 "\"bpm\":%u,\"genre\":\"%s\",\"size\":%lu,\"modified\":%lu}",
+                 (unsigned)e.bpm, e.genre,
+                 (unsigned long)e.fileSize, (unsigned long)e.fileModified);
         if (!put("%s", tail, 0)) return 0;
     }
     if (!put("%s", "]}\n", 0)) return 0;
     return n;
 }
-
 }  // namespace music_json
 
 #ifdef MUSIC_LIBRARY_SELF_TEST
@@ -207,10 +220,15 @@ int main(void)
     static MusicLibrary back;
     assert(music_json::parse(buf, back) && back.count == 2);
     assert(strcmp(back.entries[0].genre, "Folk") == 0 && back.entries[0].bpm == 60);
+    lib.entries[0].fileSize = 123456;
+    lib.entries[0].fileModified = 456789;
+    const size_t metadataLen = music_json::format(lib, buf, sizeof(buf));
+    assert(metadataLen > 0 && music_json::parse(buf, back));
+    assert(back.entries[0].fileSize == 123456 && back.entries[0].fileModified == 456789);
 
     assert(music_json::parse("{\"songs\":[]}", lib) && lib.count == 0);
     assert(!music_json::parse("", lib));
-    assert(!music_json::parse("{\"songs\":[{\"file\":\"a.mp3\"}]}", lib));            // 缺 bpm
+    assert(music_json::parse("{\"songs\":[{\"file\":\"a.mp3\"}]}", lib) && lib.entries[0].bpm == 0); // 缺 bpm 表示未知
     assert(!music_json::parse("{\"songs\":[{\"file\":\"a.wav\",\"bpm\":90}]}", lib)); // 非 mp3
     assert(!music_json::parse("{\"songs\":[{\"file\":\"../a.mp3\",\"bpm\":90}]}", lib));
     assert(!music_json::parse("{\"songs\":[{\"file\":\"a.mp3\",\"bpm\":9}]}", lib));  // BPM 超出範圍
