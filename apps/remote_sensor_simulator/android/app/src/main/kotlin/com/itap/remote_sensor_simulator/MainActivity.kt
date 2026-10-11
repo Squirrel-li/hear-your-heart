@@ -34,9 +34,19 @@ class MainActivity : FlutterActivity() {
         private const val EVENT_CHANNEL = "com.itap.remote_sensor_simulator/events"
         private const val PERMISSION_REQUEST = 4107
 
-        private val SERVICE_UUID = UUID.fromString("0000FFF0-0000-1000-8000-00805F9B34FB")
-        private val NOTIFY_UUID = UUID.fromString("0000FFF1-0000-1000-8000-00805F9B34FB")
-        private val WRITE_UUID = UUID.fromString("0000FFF2-0000-1000-8000-00805F9B34FB")
+        // profile 0: FFF0/FFF1/FFF2；profile 1: 524CACC0-... / D002 (TX, notify) / D001 (RX, write)
+        private val PROFILES = listOf(
+            Triple(
+                UUID.fromString("0000FFF0-0000-1000-8000-00805F9B34FB"),
+                UUID.fromString("0000FFF1-0000-1000-8000-00805F9B34FB"),
+                UUID.fromString("0000FFF2-0000-1000-8000-00805F9B34FB"),
+            ),
+            Triple(
+                UUID.fromString("524CACC0-3C17-D293-8E48-14FE2E4DA212"),
+                UUID.fromString("0000D002-0000-1000-8000-00805F9B34FB"),
+                UUID.fromString("0000D001-0000-1000-8000-00805F9B34FB"),
+            ),
+        )
         private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
     }
 
@@ -47,6 +57,11 @@ class MainActivity : FlutterActivity() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private val connectedDevices = mutableMapOf<String, BluetoothDevice>()
     private val subscribedDevices = mutableMapOf<String, BluetoothDevice>()
+
+    private var profile = 0
+    private val SERVICE_UUID get() = PROFILES[profile].first
+    private val NOTIFY_UUID get() = PROFILES[profile].second
+    private val WRITE_UUID get() = PROFILES[profile].third
 
     private var broadcastName = "BLE_sensor_ITAP"
     private var advertising = false
@@ -184,6 +199,7 @@ class MainActivity : FlutterActivity() {
         when (call.method) {
             "initialize" -> result.success(initializeBle())
             "setName" -> result.success(setName(call.argument<String>("name")))
+            "setProfile" -> result.success(setProfile(call.argument<Int>("profile")))
             "startAdvertising" -> result.success(startAdvertising())
             "stopAdvertising" -> result.success(stopAdvertising())
             "notify" -> result.success(notify(call.argument<ByteArray>("bytes")))
@@ -222,6 +238,23 @@ class MainActivity : FlutterActivity() {
             stopAdvertisingInternal()
             startAdvertisingInternal()
         }
+        return stateMap()
+    }
+
+    private fun setProfile(value: Int?): Map<String, Any?> {
+        if (value == null || value !in PROFILES.indices) return stateMap(error = "invalid_profile")
+        if (value == profile) return stateMap()
+        stopAdvertisingInternal()
+        try {
+            gattServer?.close()
+        } catch (_: SecurityException) {
+        }
+        gattServer = null
+        connectedDevices.clear()
+        subscribedDevices.clear()
+        lastNotification = ByteArray(0)
+        profile = value
+        if (adapter?.isEnabled == true && hasBluetoothPermissions()) openGattServer()
         return stateMap()
     }
 
@@ -398,6 +431,7 @@ class MainActivity : FlutterActivity() {
             "connected" to connectedDevices.isNotEmpty(),
             "subscribed" to subscribedDevices.isNotEmpty(),
             "name" to broadcastName,
+            "profile" to profile,
             "error" to error,
         )
 

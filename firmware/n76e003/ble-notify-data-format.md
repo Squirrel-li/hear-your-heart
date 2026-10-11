@@ -1,7 +1,7 @@
 # BLE 通訊協定（sensor ↔ hub8735）
 
 對照：`hub8735-ultra/application/embedded_loudspeaker/BLETask.{h,cpp}`、`globalData.h`、`n76e003/application/ble_sensor/source/main.c`
-更新：2026-10-07
+更新：2026-10-11
 
 ## 1. 角色與 GATT
 
@@ -12,7 +12,7 @@
 | UUID     | 類型           | 屬性                           | 方向          | 內容                                        |
 | -------- | -------------- | ------------------------------ | ------------- | ------------------------------------------- |
 | `FFF0` | Service        | —                             | —            | 本協定唯一服務                              |
-| `FFF1` | Characteristic | Notify（含 CCCD`0x2902`）    | sensor → hub | Frame（第 3 節）：PPG / G-sensor / cmd 回應 |
+| `FFF1` | Characteristic | Notify（含 CCCD`0x2902`）    | sensor → hub | Frame（第 3 節）：PPG / Acc / Gyro / cmd 回應 |
 | `FFF2` | Characteristic | Write / Write Without Response | hub → sensor | cmd 請求（第 6 節，不套用 Frame）           |
 
 ## 2. 連線流程
@@ -40,7 +40,7 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | `0x00` cmd、`0x01` PPG、`0x02` G-sensor                |
+| `msgType`         | uint8  | `0x00` cmd、`0x01` PPG、`0x02` Acc、`0x03` Gyro        |
 | `payload`          | —     | 依 msgType 決定（第 4–6 節）                               |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
@@ -49,7 +49,8 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 | -------- | ------------------- | ------- | ---------- | ---------------------------------------- |
 | `0x00` | cmd 回應            | 3–15B   | 8–20B      | sensor → hub：FFF1（第 6 節）           |
 | `0x01` | PPG                 | 15B     | 20B        | sensor → hub：FFF1                      |
-| `0x02` | G-sensor（LSM6DS3） | 16B     | 21B        | sensor → hub：FFF1                      |
+| `0x02` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1                      |
+| `0x03` | Gyro（LSM6DS3）     | 10B     | 15B        | sensor → hub：FFF1                      |
 
 ## 4. Payload：PPG（0x01，15B）→ `PpgSensorElement`
 
@@ -68,13 +69,15 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 
 偏移 4–14 原樣對應 PPG 模組 frame 的 `ST, D0..D9`。
 
-## 5. Payload：G-sensor（0x02，16B）→ `GSensorElement`
+## 5. Payload：Acc（0x02，10B）→ `AccElement`、Gyro（0x03，10B）→ `GyroElement`
 
-| 偏移 | 欄位                                 | 型別      | 說明                |
-| ---- | ------------------------------------ | --------- | ------------------- |
-| 0    | `sequence`                         | uint32    | G-sensor 計數       |
-| 4    | `acc_x` / `acc_y` / `acc_z`    | int16 ×3 | LSM6DS3 原始 counts |
-| 10   | `gyro_x` / `gyro_y` / `gyro_z` | int16 ×3 | LSM6DS3 原始 counts |
+Acc 與 Gyro 是兩種獨立的 frame，同一次取樣會各送一筆，兩筆的 `sensor_time_ms` 與 `sequence` 相同；Acc 先送、Gyro 後送。
+
+| 偏移 | 欄位                                       | 型別      | 說明                    |
+| ---- | ------------------------------------------ | --------- | ----------------------- |
+| 0    | `sequence`                               | uint32    | IMU 取樣計數            |
+| 4    | `acc_x` / `acc_y` / `acc_z`（0x02）      | int16 ×3 | LSM6DS3 原始 counts     |
+| 4    | `gyro_x` / `gyro_y` / `gyro_z`（0x03）   | int16 ×3 | LSM6DS3 原始 counts     |
 
 由 hub 換算：acc(mg) = raw × 靈敏度；gyro(mdps) = raw × 靈敏度。預設量程為 **±8 g / ±1000 dps**。
 
@@ -123,13 +126,12 @@ hub → sensor 寫入 FFF2，**不套用 Frame**（不帶 `sensor_time_ms` 與 `
 
 ## 7. MTU
 
-- 預設 ATT MTU 為 23，一個 notify 最多帶 20B：PPG（20B）放得下，G-sensor（21B）放不下。
-- 決議：G-sensor **調大 MTU，不分包**。
-- 目前 hub 不會主動交換 MTU，Ameba library 的 Peripheral 預設也不會主動請求，實際值需要實測。
+- 預設 ATT MTU 為 23，一個 notify 最多帶 20B：PPG（20B）、Acc／Gyro（各 15B）都放得下，不需要調大 MTU。
+- Acc 與 Gyro 拆成兩個 frame，就是為了不超過預設 MTU。
 
 ## 8. 待定
 
-1. cmd 指令列表（opcode `0x02` 起），例如 Start、Stop、取樣率、sensor mask、G-sensor 量程。
-2. 量程回報：用 cmd 回應，或在 G-sensor payload 加上 range byte。
-3. G-sensor 尚未在 sensor 端實作。
+1. cmd 指令列表（opcode `0x02` 起），例如 Start、Stop、取樣率、sensor mask、IMU 量程。
+2. 量程回報：用 cmd 回應，或在 Acc／Gyro payload 加上 range byte。
+3. IMU 已在 sensor 端實作（1 Hz、±8 g / ±1000 dps、I2C 位址 0x6A），Acc／Gyro 各送一筆 15B frame，尚未實測。
 4. N76E003 韌體仍以「FFF2 首位元組為 `0x01`」判斷握手，需改成依第 6 節解析（opcode `0x01`、長度 ≥ 2）並送回應；hub 端也尚未實作 cmd 的收送。

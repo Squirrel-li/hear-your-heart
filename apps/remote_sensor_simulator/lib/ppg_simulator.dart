@@ -14,6 +14,7 @@ class PpgFrame {
   final Uint8List bytes;
   final int timestamp;
   final int sequence;
+  int get type => bytes[4];
 
   Uint8List payload({int timestampOffset = 0, int sequenceOffset = 0}) {
     final result = Uint8List.fromList(bytes);
@@ -38,6 +39,9 @@ class PpgDataLoader {
     PpgSource('模擬：有氧', 'assets/testdata/ppg_aerobic.txt'),
     PpgSource('模擬：無氧', 'assets/testdata/ppg_anaerobic.txt'),
     PpgSource('模擬：最大強度', 'assets/testdata/ppg_maximal.txt'),
+    PpgSource('IMU：靜止', 'assets/testdata/gsensor_rest.txt'),
+    PpgSource('IMU：步行', 'assets/testdata/gsensor_walk.txt'),
+    PpgSource('IMU：跑步', 'assets/testdata/gsensor_run.txt'),
   ];
 
   static Future<List<PpgDataSet>> load(Future<String> Function(String path) read) async {
@@ -57,30 +61,72 @@ class PpgDataLoader {
       if (line.isEmpty || line.startsWith('#')) continue;
 
       final fields = line.split(RegExp(r'\s+'));
-      if (fields.length != 21) {
-        throw FormatException('${source.label}: 第 $lineNumber 行不是 21 bytes');
+      if (fields.length < 5) {
+        throw FormatException(source.label + ': 第 ' + lineNumber.toString() + ' 行缺少 frame header');
       }
-      final bytes = Uint8List(21);
+      final parsed = Uint8List(fields.length);
       for (var i = 0; i < fields.length; i++) {
         if (!RegExp(r'^[0-9a-fA-F]{2}$').hasMatch(fields[i])) {
-          throw FormatException('${source.label}: 第 $lineNumber 行有無效 HEX');
+          throw FormatException(source.label + ': 第 ' + lineNumber.toString() + ' 行有無效 HEX');
         }
-        bytes[i] = int.parse(fields[i], radix: 16);
+        parsed[i] = int.parse(fields[i], radix: 16);
       }
+
+      final type = parsed[4];
+      final frameLength = switch (type) {
+        0x01 => 20,
+        0x02 || 0x03 => 15,
+        _ => 0,
+      };
+      final legacyPpgLength = type == 0x01 && fields.length == 21;
+      if (frameLength == 0 || (!legacyPpgLength && fields.length != frameLength)) {
+        throw FormatException(source.label + ': 第 ' + lineNumber.toString() + ' 行的 frame 長度不符');
+      }
+
+      // 舊 PPG 測資多一個未使用尾位元組；線上只送協定定義的 20 bytes。
+      final bytes = Uint8List.fromList(parsed.sublist(0, frameLength));
       final frame = PpgFrame(
         bytes: bytes,
         timestamp: _readUint32(bytes, 0),
         sequence: _readUint32(bytes, 5),
       );
-      if (frames.isNotEmpty && frame.timestamp <= frames.last.timestamp) {
-        throw FormatException('${source.label}: timestamp 必須遞增');
-      }
-      if (frames.isNotEmpty && frame.sequence != frames.last.sequence + 1) {
-        throw FormatException('${source.label}: sequence 必須連續遞增');
+      if (frames.isEmpty) {
+        if (frame.type == 0x03) {
+          throw FormatException(source.label + ': IMU 資料必須先送 Acc');
+        }
+      } else {
+        final previous = frames.last;
+        if (frames.first.type == 0x01) {
+          if (frame.type != 0x01) {
+            throw FormatException(source.label + ': PPG 資料不能混入其他 frame');
+          }
+          if (frame.timestamp <= previous.timestamp) {
+            throw FormatException(source.label + ': timestamp 必須遞增');
+          }
+          if (frame.sequence != previous.sequence + 1) {
+            throw FormatException(source.label + ': sequence 必須連續遞增');
+          }
+        } else if (previous.type == 0x02 && frame.type == 0x03) {
+          if (frame.timestamp != previous.timestamp || frame.sequence != previous.sequence) {
+            throw FormatException(source.label + ': Acc/Gyro 必須共用 timestamp 與 sequence');
+          }
+        } else if (previous.type == 0x03 && frame.type == 0x02) {
+          if (frame.timestamp <= previous.timestamp) {
+            throw FormatException(source.label + ': 下一筆 IMU timestamp 必須遞增');
+          }
+          if (frame.sequence != previous.sequence + 1) {
+            throw FormatException(source.label + ': 下一筆 IMU sequence 必須連續遞增');
+          }
+        } else {
+          throw FormatException(source.label + ': IMU frame 必須依 Acc、Gyro 順序成對');
+        }
       }
       frames.add(frame);
     }
-    if (frames.isEmpty) throw FormatException('${source.label}: 沒有資料');
+    if (frames.isEmpty) throw FormatException(source.label + ': 沒有資料');
+    if (frames.first.type == 0x02 && frames.last.type != 0x03) {
+      throw FormatException(source.label + ': 最後一筆 IMU 缺少 Gyro frame');
+    }
     return frames;
   }
 }
@@ -108,13 +154,21 @@ class PpgCursor {
   int nextIndex = 0;
   int cycle = 0;
 
-  int get _timestampStep => dataSet.frames.length < 2
-      ? 5000
-      : dataSet.frames[1].timestamp - dataSet.frames[0].timestamp;
+  int get _timestampStep {
+    for (var i = 1; i < dataSet.frames.length; i++) {
+      final step = dataSet.frames[i].timestamp - dataSet.frames[i - 1].timestamp;
+      if (step > 0) return step;
+    }
+    return 5000;
+  }
 
-  int get _sequenceStep => dataSet.frames.length < 2
-      ? 1
-      : dataSet.frames[1].sequence - dataSet.frames[0].sequence;
+  int get _sequenceStep {
+    for (var i = 1; i < dataSet.frames.length; i++) {
+      final step = dataSet.frames[i].sequence - dataSet.frames[i - 1].sequence;
+      if (step > 0) return step;
+    }
+    return 1;
+  }
 
   int get _cycleTimestampSpan =>
       dataSet.frames.last.timestamp - dataSet.frames.first.timestamp + _timestampStep;
@@ -285,4 +339,3 @@ void _writeUint32(Uint8List bytes, int offset, int value) {
   bytes[offset + 2] = (value >> 8) & 0xff;
   bytes[offset + 3] = value & 0xff;
 }
-
