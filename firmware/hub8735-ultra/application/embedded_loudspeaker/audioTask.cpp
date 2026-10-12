@@ -490,6 +490,15 @@ void handleAudioCommand(AudioCmdElement& command)
         }
         break;
 
+    case AudioCommandType::CancelBpmAnalysis:
+        // Finished files stay saved; the file in progress is dropped (bpm 0 / genre empty, retried next scan).
+        if (bpmScan.requested || bpmScan.running) {
+            LOGW(BPM_TAG, "scan cancelled by user (done %u of %u)", static_cast<unsigned>(bpmScan.index),
+                 static_cast<unsigned>(bpmScan.count));
+            finishBpmScan(BpmAnalysisState::Cancelled);
+        }
+        break;
+
     case AudioCommandType::AnalyzeNewOrUnknownBpm:
     case AudioCommandType::ReanalyzeAllBpm:
         if (amp.isMp3Playing() || playbackPaused) {
