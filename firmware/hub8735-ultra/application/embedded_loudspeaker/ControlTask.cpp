@@ -30,6 +30,7 @@ const char* audioCommandName(AudioCommandType type)
     case AudioCommandType::Resume: return "Resume";
     case AudioCommandType::AnalyzeNewOrUnknownBpm: return "AnalyzeNewOrUnknownBpm";
     case AudioCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
+    case AudioCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
     }
     return "?";
 }
@@ -44,6 +45,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::SetVolume: return "SetVolume";
     case UiCommandType::AnalyzeNewOrUnknownBpm: return "AnalyzeNewOrUnknownBpm";
     case UiCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
+    case UiCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
     case UiCommandType::PlaySong: return "PlaySong";
     }
     return "?";
@@ -344,6 +346,10 @@ void handleUiCommand(const UiCommandElement& cmd)
         break;
     case UiCommandType::ReanalyzeAllBpm:
         startBpmAnalysis(BpmAnalysisMode::All);
+        break;
+    case UiCommandType::CancelBpmAnalysis:
+        command.command = AudioCommandType::CancelBpmAnalysis;
+        if (!sendAudioCommand(command)) LOGW(TAG, "cancel analysis command was not sent");
         break;
     }
 }

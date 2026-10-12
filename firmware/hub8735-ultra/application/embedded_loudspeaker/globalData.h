@@ -123,7 +123,8 @@ enum class AudioCommandType : uint8_t {
     Resume,
     SetVolume,
     AnalyzeNewOrUnknownBpm,
-    ReanalyzeAllBpm
+    ReanalyzeAllBpm,
+    CancelBpmAnalysis
 };
 
 struct AudioCmdElement {
@@ -209,6 +210,7 @@ enum class UiCommandType : uint8_t {
     SetVolume,
     AnalyzeNewOrUnknownBpm,
     ReanalyzeAllBpm,
+    CancelBpmAnalysis,
     PlaySong
 };
 

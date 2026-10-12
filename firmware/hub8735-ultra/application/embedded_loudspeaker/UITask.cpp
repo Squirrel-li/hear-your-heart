@@ -236,6 +236,11 @@ void activateItem()
         break;
     }
     case Screen::BpmStatus:
+        if (bpmAnalysisState == BpmAnalysisState::Queued ||
+            bpmAnalysisState == BpmAnalysisState::Running) {
+            sendCommand(UiCommandType::CancelBpmAnalysis);
+            bpmAnalysisState = BpmAnalysisState::Cancelled;
+        }
         backToTop(TopBpmAnalysis);
         break;
     case Screen::SongList:
@@ -385,7 +390,7 @@ void itemLabel(uint8_t item, char* out, size_t size)
             if (bpmAnalysisState == BpmAnalysisState::Queued)
                 snprintf(out, size, "Starting...");
             else if (bpmAnalysisState == BpmAnalysisState::Cancelled)
-                snprintf(out, size, "Stop audio first");
+                snprintf(out, size, "Cancelled");
             else if (bpmAnalysisState == BpmAnalysisState::Complete ||
                      bpmAnalysisState == BpmAnalysisState::Failed)
                 snprintf(out, size, "OK %u  Fail %u",
@@ -398,7 +403,9 @@ void itemLabel(uint8_t item, char* out, size_t size)
             snprintf(out, size, "%.21s", bpmAnalysisFile);
             break;
         default:
-            snprintf(out, size, "OK: Back");
+            snprintf(out, size, "%s",
+                     bpmAnalysisState == BpmAnalysisState::Queued ||
+                     bpmAnalysisState == BpmAnalysisState::Running ? "OK: Cancel" : "OK: Back");
             break;
         }
         return;
