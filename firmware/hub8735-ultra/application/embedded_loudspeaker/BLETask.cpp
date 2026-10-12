@@ -8,6 +8,8 @@ BLERemoteService* UartService = nullptr;
 BLERemoteCharacteristic* Rx = nullptr;
 BLERemoteCharacteristic* Tx = nullptr;
 
+void scanCB(T_LE_CB_DATA* p_data); // defined below, outside the anonymous namespace
+
 namespace {
 
 constexpr const char* TAG = "BLE";
@@ -36,31 +38,16 @@ uint32_t connectAttempts = 0;
 volatile uint32_t cbFrames = 0;
 volatile uint32_t cbQueueFull = 0;
 volatile uint32_t cbOversize = 0;
+volatile uint32_t cbDuplicates = 0;
 
-// Per message type (1=PPG, 2=Acc, 3=Gyro): last sequence, to spot lost frames.
-struct SeqTracker {
-    bool seen;
-    uint32_t last;
-    uint32_t gaps;
-    uint32_t lost;
-};
-SeqTracker seqTrack[4];
-
-void trackSequence(uint8_t msgType, uint32_t sequence)
-{
-    if (msgType < 1 || msgType > 3) return;
-    SeqTracker& t = seqTrack[msgType];
-    if (t.seen && sequence != t.last + 1u) {
-        const uint32_t missing = sequence - t.last - 1u;
-        ++t.gaps;
-        t.lost += missing;
-        LOGW(TAG, "msgType=%u sequence gap: expected %lu got %lu (lost %lu)",
-             static_cast<unsigned>(msgType), static_cast<unsigned long>(t.last + 1u),
-             static_cast<unsigned long>(sequence), static_cast<unsigned long>(missing));
-    }
-    t.seen = true;
-    t.last = sequence;
-}
+// ponytail: the BLE library registers one more GATT client on every BLE.addClient() and never
+// unregisters it, so after N connections each notification reaches the callback N times (and the
+// 4th registration fails, BLE_CENTRAL_APP_MAX_LINKS = 3). Identical back-to-back frames are
+// dropped here (real frames never repeat: they carry a sequence number), and the stack is
+// restarted before the registrations run out. Remove both once the library can unregister clients.
+uint8_t lastFrame[BLE_FRAME_MAX];
+volatile uint16_t lastFrameLen = 0;
+uint8_t clientRegistrations = 0;
 
 // The BLE library deletes the client and its services on disconnect.
 void clearRemoteHandles()
@@ -84,6 +71,60 @@ int16_t readInt16BE(const uint8_t* p)
     return static_cast<int16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
 }
 
+void handleAcc(const BleFrameElement& frame, uint32_t sensorTimeMs, uint32_t sequence, const uint8_t* xyz,
+               uint32_t& statsAcc)
+{
+    AccElement accElement;
+    accElement.hub_rx_time_ms = frame.hub_rx_time_ms;
+    accElement.sensor_time_ms = sensorTimeMs;
+    accElement.sequence = sequence;
+    accElement.acc_x = readInt16BE(&xyz[0]);
+    accElement.acc_y = readInt16BE(&xyz[2]);
+    accElement.acc_z = readInt16BE(&xyz[4]);
+    ++statsAcc;
+    if (xQueueSend(accSensorQueue, &accElement, 0) == pdPASS) {
+        LOGT(TAG, "Acc -> analysis: %d,%d,%d sequence=%lu", accElement.acc_x, accElement.acc_y,
+             accElement.acc_z, static_cast<unsigned long>(accElement.sequence));
+    } else {
+        LOGW(TAG, "Acc queue full, sample dropped (sequence=%lu)",
+             static_cast<unsigned long>(accElement.sequence));
+    }
+    UiUpdateElement accUpdate{};
+    accUpdate.type = UiUpdateType::Acc;
+    accUpdate.timestampMs = accElement.hub_rx_time_ms;
+    accUpdate.acc[0] = accElement.acc_x;
+    accUpdate.acc[1] = accElement.acc_y;
+    accUpdate.acc[2] = accElement.acc_z;
+    postUi(accUpdate);
+}
+
+void handleGyro(const BleFrameElement& frame, uint32_t sensorTimeMs, uint32_t sequence, const uint8_t* xyz,
+                uint32_t& statsGyro)
+{
+    GyroElement gyroElement;
+    gyroElement.hub_rx_time_ms = frame.hub_rx_time_ms;
+    gyroElement.sensor_time_ms = sensorTimeMs;
+    gyroElement.sequence = sequence;
+    gyroElement.gyro_x = readInt16BE(&xyz[0]);
+    gyroElement.gyro_y = readInt16BE(&xyz[2]);
+    gyroElement.gyro_z = readInt16BE(&xyz[4]);
+    ++statsGyro;
+    if (xQueueSend(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
+        LOGT(TAG, "Gyro -> analysis: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
+             gyroElement.gyro_z, static_cast<unsigned long>(gyroElement.sequence));
+    } else {
+        LOGW(TAG, "Gyro queue full, sample dropped (sequence=%lu)",
+             static_cast<unsigned long>(gyroElement.sequence));
+    }
+    UiUpdateElement gyroUpdate{};
+    gyroUpdate.type = UiUpdateType::Gyro;
+    gyroUpdate.timestampMs = gyroElement.hub_rx_time_ms;
+    gyroUpdate.gyro[0] = gyroElement.gyro_x;
+    gyroUpdate.gyro[1] = gyroElement.gyro_y;
+    gyroUpdate.gyro[2] = gyroElement.gyro_z;
+    postUi(gyroUpdate);
+}
+
 bool sensorConnected()
 {
     return connID >= 0 && BLE.connected(connID);
@@ -99,8 +140,23 @@ void dropConnection(const char* reason)
     clearRemoteHandles();
 }
 
+void restartBleStack()
+{
+    LOGI(TAG, "restarting BLE stack to release client registrations (%u used)",
+         static_cast<unsigned>(clientRegistrations));
+    clearRemoteHandles();
+    BLE.deinit();
+    BLE.init();
+    BLE.setScanCallback(scanCB);
+    BLE.beginCentral(1);
+    clientConfigured = false;
+    clientRegistrations = 0;
+}
+
 bool connectSensor()
 {
+    if (clientRegistrations >= BLE_CENTRAL_APP_MAX_LINKS) restartBleStack();
+    lastFrameLen = 0;
     clearRemoteHandles();
     connID = -1;
     targetFound = false;
@@ -150,6 +206,7 @@ bool connectSensor()
         dropConnection("add client failed");
         return false;
     }
+    ++clientRegistrations;
     client->discoverServices();
     LOGI(TAG, "discovering services (timeout %lu ms)", static_cast<unsigned long>(BLE_DISCOVERY_TIMEOUT_MS));
     const uint32_t discoveryStart = millis();
@@ -224,6 +281,12 @@ void notificationCB(BLERemoteCharacteristic* chr, uint8_t* data, uint16_t len)
              static_cast<unsigned>(BLE_FRAME_MAX));
         return; // Skip processing for this notification
     }
+    if (len == lastFrameLen && memcmp(lastFrame, data, len) == 0) {
+        ++cbDuplicates;
+        return; // repeated delivery of the same notification
+    }
+    memcpy(lastFrame, data, len);
+    lastFrameLen = len;
     memcpy(msgElement.data, data, len);
     ++cbFrames;
     if (xQueueSend(bleRxFrameQueue, &msgElement, 0) != pdPASS) {
@@ -295,15 +358,14 @@ void BLETask(void* parameter) {
 
         if ((uint32_t)(millis() - lastStatsMs) >= 5000u) {
             const uint32_t frames = cbFrames, full = cbQueueFull;
-            LOGD(TAG, "5s stats: link=%s rx=%lu (queue full %lu) PPG=%lu Acc=%lu Gyro=%lu bad=%lu | "
-                      "total gaps PPG=%lu Acc=%lu Gyro=%lu, oversize=%lu",
+            LOGD(TAG, "5s stats: link=%s rx=%lu (queue full %lu) PPG=%lu Acc=%lu Gyro=%lu bad=%lu, "
+                      "oversize=%lu dup=%lu",
                  linkUp ? "up" : "down",
                  static_cast<unsigned long>(frames - statsFrames),
                  static_cast<unsigned long>(full - statsQueueFull),
                  static_cast<unsigned long>(statsPpg), static_cast<unsigned long>(statsAcc),
                  static_cast<unsigned long>(statsGyro), static_cast<unsigned long>(statsBad),
-                 static_cast<unsigned long>(seqTrack[1].lost), static_cast<unsigned long>(seqTrack[2].lost),
-                 static_cast<unsigned long>(seqTrack[3].lost), static_cast<unsigned long>(cbOversize));
+                 static_cast<unsigned long>(cbOversize), static_cast<unsigned long>(cbDuplicates));
             statsFrames = frames;
             statsQueueFull = full;
             statsPpg = statsAcc = statsGyro = statsBad = 0;
@@ -312,6 +374,10 @@ void BLETask(void* parameter) {
 
         BleFrameElement msgElement;
         if (xQueueReceive(bleRxFrameQueue, &msgElement, 0) == pdPASS) {
+            if (msgElement.length >= 5 && msgElement.data[4] == 0x00) { // cmd: reserved, payload not defined yet
+                LOGD(TAG, "cmd frame ignored (len=%u)", static_cast<unsigned>(msgElement.length));
+                continue;
+            }
             if (msgElement.length < 9) {
                 LOGW(TAG, "frame too short: len=%u (need >= 9)", static_cast<unsigned>(msgElement.length));
                 ++statsBad;
@@ -328,7 +394,6 @@ void BLETask(void* parameter) {
                 (static_cast<uint32_t>(msgElement.data[6]) << 16) |
                 (static_cast<uint32_t>(msgElement.data[7]) << 8) |
                 static_cast<uint32_t>(msgElement.data[8]);
-            trackSequence(msgType, sequence);
             LOGT(TAG, "frame msgType=%u sequence=%lu sensor_ms=%lu len=%u", static_cast<unsigned>(msgType),
                  static_cast<unsigned long>(sequence), static_cast<unsigned long>(sensor_time_ms),
                  static_cast<unsigned>(msgElement.length));
@@ -369,62 +434,28 @@ void BLETask(void* parameter) {
                 ppgUpdate.spo2 = ppgElement.SpO2;
                 ppgUpdate.sensorStatus = ppgElement.status;
                 postUi(ppgUpdate);
-            } else if (msgType == 0x02) { // Acc
+            } else if (msgType == 0x02) { // acc + gyro in one frame
+                if (msgElement.length < 21) {
+                    LOGW(TAG, "IMU frame too short: len=%u (need >= 21)", static_cast<unsigned>(msgElement.length));
+                    ++statsBad;
+                    continue; // Skip processing for this frame
+                }
+                handleAcc(msgElement, sensor_time_ms, sequence, &msgElement.data[9], statsAcc);
+                handleGyro(msgElement, sensor_time_ms, sequence, &msgElement.data[15], statsGyro);
+            } else if (msgType == 0x03) { // Acc only
                 if (msgElement.length < 15) {
                     LOGW(TAG, "Acc frame too short: len=%u (need >= 15)", static_cast<unsigned>(msgElement.length));
                     ++statsBad;
                     continue; // Skip processing for this frame
                 }
-                AccElement accElement;
-                accElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
-                accElement.sensor_time_ms = sensor_time_ms;
-                accElement.sequence = sequence;
-                accElement.acc_x = readInt16BE(&msgElement.data[9]);
-                accElement.acc_y = readInt16BE(&msgElement.data[11]);
-                accElement.acc_z = readInt16BE(&msgElement.data[13]);
-                ++statsAcc;
-                if (xQueueSend(accSensorQueue, &accElement, 0) == pdPASS) {
-                    LOGT(TAG, "Acc -> analysis: %d,%d,%d sequence=%lu", accElement.acc_x, accElement.acc_y,
-                         accElement.acc_z, static_cast<unsigned long>(accElement.sequence));
-                } else {
-                    LOGW(TAG, "Acc queue full, sample dropped (sequence=%lu)",
-                         static_cast<unsigned long>(accElement.sequence));
-                }
-                UiUpdateElement accUpdate{};
-                accUpdate.type = UiUpdateType::Acc;
-                accUpdate.timestampMs = accElement.hub_rx_time_ms;
-                accUpdate.acc[0] = accElement.acc_x;
-                accUpdate.acc[1] = accElement.acc_y;
-                accUpdate.acc[2] = accElement.acc_z;
-                postUi(accUpdate);
-            } else if (msgType == 0x03) { // Gyro
+                handleAcc(msgElement, sensor_time_ms, sequence, &msgElement.data[9], statsAcc);
+            } else if (msgType == 0x04) { // Gyro only
                 if (msgElement.length < 15) {
                     LOGW(TAG, "Gyro frame too short: len=%u (need >= 15)", static_cast<unsigned>(msgElement.length));
                     ++statsBad;
                     continue; // Skip processing for this frame
                 }
-                GyroElement gyroElement;
-                gyroElement.hub_rx_time_ms = msgElement.hub_rx_time_ms;
-                gyroElement.sensor_time_ms = sensor_time_ms;
-                gyroElement.sequence = sequence;
-                gyroElement.gyro_x = readInt16BE(&msgElement.data[9]);
-                gyroElement.gyro_y = readInt16BE(&msgElement.data[11]);
-                gyroElement.gyro_z = readInt16BE(&msgElement.data[13]);
-                ++statsGyro;
-                if (xQueueSend(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
-                    LOGT(TAG, "Gyro -> analysis: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
-                         gyroElement.gyro_z, static_cast<unsigned long>(gyroElement.sequence));
-                } else {
-                    LOGW(TAG, "Gyro queue full, sample dropped (sequence=%lu)",
-                         static_cast<unsigned long>(gyroElement.sequence));
-                }
-                UiUpdateElement gyroUpdate{};
-                gyroUpdate.type = UiUpdateType::Gyro;
-                gyroUpdate.timestampMs = gyroElement.hub_rx_time_ms;
-                gyroUpdate.gyro[0] = gyroElement.gyro_x;
-                gyroUpdate.gyro[1] = gyroElement.gyro_y;
-                gyroUpdate.gyro[2] = gyroElement.gyro_z;
-                postUi(gyroUpdate);
+                handleGyro(msgElement, sensor_time_ms, sequence, &msgElement.data[9], statsGyro);
             } else {
                 LOGW(TAG, "unknown msgType=0x%02X (len=%u, sequence=%lu)", static_cast<unsigned>(msgType),
                      static_cast<unsigned>(msgElement.length), static_cast<unsigned long>(sequence));
