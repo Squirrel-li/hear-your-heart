@@ -1,6 +1,7 @@
 #include "audioTask.h"
 #include "music_library.h"
 #include "music_bpm_analyzer.h"
+#include "music_genre_classifier.h"
 
 #include <cstring>
 
@@ -12,6 +13,7 @@ constexpr const char* BPM_TAG = "BPMSCAN";
 AmebaFatFS fs;
 MAX98357 amp;
 MusicBpmAnalyzer bpmAnalyzer;
+MusicGenreClassifier genreClassifier;
 bool currentPlaybackAutomatic = false;
 bool playbackPaused = false;
 int8_t currentAutomaticSongIndex = -1;
@@ -22,10 +24,14 @@ struct BpmScanTrack {
     uint32_t fileModified;
 };
 
+// 每首歌依序：BPM（需要時）-> 曲風（需要時）。兩者互不阻擋，任一失敗該曲即計為失敗。
+enum class ScanPhase : uint8_t { Start, Bpm, GenreStart, Genre };
+
 struct BpmScanJob {
     bool requested;
     bool running;
-    bool fileStarted;
+    ScanPhase phase;
+    bool fileFailed;
     BpmAnalysisMode mode;
     BpmScanTrack tracks[MUSIC_LIBRARY_MAX];
     uint8_t count;
@@ -137,7 +143,8 @@ void reportBpmAnalysis(BpmAnalysisState state, uint8_t current = 0,
 void finishBpmScan(BpmAnalysisState state)
 {
     bpmAnalyzer.cancel();
-    bpmScan.fileStarted = false;
+    genreClassifier.shutdown();
+    bpmScan.phase = ScanPhase::Start;
     bpmScan.running = false;
     bpmScan.requested = false;
     musicBpmAnalysisBusy = false;
@@ -167,7 +174,8 @@ bool beginBpmScan()
 {
     bpmScan.running = true;
     bpmScan.requested = false;
-    bpmScan.fileStarted = false;
+    bpmScan.phase = ScanPhase::Start;
+    bpmScan.fileFailed = false;
     bpmScan.count = 0;
     bpmScan.index = 0;
     bpmScan.succeeded = 0;
@@ -226,13 +234,15 @@ bool beginBpmScan()
             const bool identityKnown = entry.fileSize != 0 && entry.fileModified != 0;
             const bool replaced = identityKnown &&
                 (entry.fileSize != fileSize || entry.fileModified != fileModified);
-            needsAnalysis = needsAnalysis || entry.bpm == 0 || !identityKnown || replaced;
+            needsAnalysis = needsAnalysis || entry.bpm == 0 || entry.genre[0] == '\0' ||
+                            !identityKnown || replaced;
         }
         if (needsAnalysis) {
             if (addBpmScanTrack(filename, fileSize, fileModified)) {
                 const char* why = index < 0 ? "new file"
                     : bpmScan.mode == BpmAnalysisMode::All ? "reanalyze all"
                     : musicLibrary.entries[index].bpm == 0 ? "BPM unknown"
+                    : musicLibrary.entries[index].genre[0] == '\0' ? "genre unknown"
                     : "file replaced or identity unknown";
                 LOGD(BPM_TAG, "queue %s (%lu bytes): %s", filename, static_cast<unsigned long>(fileSize), why);
             } else {
@@ -279,6 +289,7 @@ bool beginBpmScan()
             (entry.fileSize != track.fileSize || entry.fileModified != track.fileModified);
         if (isNew || replaced || !identityKnown) {
             entry.bpm = 0;  // Never retain an old result for a changed or unidentified file.
+            entry.genre[0] = '\0';
             entry.fileSize = track.fileSize;
             entry.fileModified = track.fileModified;
             catalogChanged = true;
@@ -311,6 +322,15 @@ bool beginBpmScan()
     return true;
 }
 
+void finishScanFile()
+{
+    if (bpmScan.fileFailed) countFailure();
+    else ++bpmScan.succeeded;
+    ++bpmScan.index;  // the next file is reported when its analysis starts
+    bpmScan.phase = ScanPhase::Start;
+    bpmScan.fileFailed = false;
+}
+
 void advanceBpmScan()
 {
     if (!bpmScan.running) return;
@@ -321,57 +341,97 @@ void advanceBpmScan()
 
     BpmScanTrack& track = bpmScan.tracks[bpmScan.index];
     const uint8_t current = static_cast<uint8_t>(bpmScan.index + 1);
-    if (!bpmScan.fileStarted) {
+    const int index = findLibraryEntry(track.filename);
+    if (index < 0) {
+        bpmScan.fileFailed = true;
+        finishScanFile();
+        return;
+    }
+    MusicEntry& entry = musicLibrary.entries[index];
+    const bool all = bpmScan.mode == BpmAnalysisMode::All;
+
+    switch (bpmScan.phase) {
+    case ScanPhase::Start:
         reportBpmAnalysis(BpmAnalysisState::Running, current, track.filename);
         LOGI(BPM_TAG, "[%u/%u] analyzing %s", static_cast<unsigned>(current), static_cast<unsigned>(bpmScan.count),
              track.filename);
         bpmFileStartMs = millis();
-        if (!bpmAnalyzer.begin(fs, track.filename)) {
-            LOGE(BPM_TAG, "[%u/%u] %s: open failed: %s", static_cast<unsigned>(current),
-                 static_cast<unsigned>(bpmScan.count), track.filename, bpmAnalyzer.error());
-            countFailure();
-            ++bpmScan.index;
-            return;
+        bpmScan.fileFailed = false;
+        bpmScan.phase = ScanPhase::GenreStart;
+        if (all || entry.bpm == 0) {
+            if (bpmAnalyzer.begin(fs, track.filename)) {
+                bpmScan.phase = ScanPhase::Bpm;
+            } else {
+                LOGE(BPM_TAG, "[%u/%u] %s: open failed: %s", static_cast<unsigned>(current),
+                     static_cast<unsigned>(bpmScan.count), track.filename, bpmAnalyzer.error());
+                bpmScan.fileFailed = true;
+            }
         }
-        bpmScan.fileStarted = true;
         return;
-    }
 
-    uint16_t bpm = 0;
-    const MusicBpmAnalyzer::StepResult result = bpmAnalyzer.step(bpm);
-    if (result == MusicBpmAnalyzer::StepResult::InProgress) return;
-
-    if (result == MusicBpmAnalyzer::StepResult::Complete) {
-        const int index = findLibraryEntry(track.filename);
-        if (index < 0) {
-            countFailure();
-        } else {
-            MusicEntry& entry = musicLibrary.entries[index];
-            const uint16_t previousBpm = entry.bpm;
+    case ScanPhase::Bpm: {
+        uint16_t bpm = 0;
+        const MusicBpmAnalyzer::StepResult result = bpmAnalyzer.step(bpm);
+        if (result == MusicBpmAnalyzer::StepResult::InProgress) return;
+        if (result == MusicBpmAnalyzer::StepResult::Complete) {
+            LOGI(BPM_TAG, "[%u/%u] %s: %u BPM (was %u) in %lu ms", static_cast<unsigned>(current),
+                 static_cast<unsigned>(bpmScan.count), track.filename, static_cast<unsigned>(bpm),
+                 static_cast<unsigned>(entry.bpm), static_cast<unsigned long>(millis() - bpmFileStartMs));
             entry.bpm = bpm;
             entry.fileSize = track.fileSize;
             entry.fileModified = track.fileModified;
-            LOGI(BPM_TAG, "[%u/%u] %s: %u BPM (was %u) in %lu ms", static_cast<unsigned>(current),
-                 static_cast<unsigned>(bpmScan.count), track.filename, static_cast<unsigned>(bpm),
-                 static_cast<unsigned>(previousBpm), static_cast<unsigned long>(millis() - bpmFileStartMs));
-            if (musicLibrarySave(fs, musicLibrary)) {
-                ++bpmScan.succeeded;
-                LOGD(BPM_TAG, "catalog saved");
-            } else {
-                countFailure();
+            if (!musicLibrarySave(fs, musicLibrary)) {
+                bpmScan.fileFailed = true;
                 LOGE(BPM_TAG, "%s: BPM estimated but catalog save failed", track.filename);
             }
+        } else {
+            LOGE(BPM_TAG, "[%u/%u] %s: analysis failed: %s (after %lu ms)", static_cast<unsigned>(current),
+                 static_cast<unsigned>(bpmScan.count), track.filename, bpmAnalyzer.error(),
+                 static_cast<unsigned long>(millis() - bpmFileStartMs));
+            bpmScan.fileFailed = true;
         }
-    } else {
-        LOGE(BPM_TAG, "[%u/%u] %s: analysis failed: %s (after %lu ms)", static_cast<unsigned>(current),
-             static_cast<unsigned>(bpmScan.count), track.filename, bpmAnalyzer.error(),
-             static_cast<unsigned long>(millis() - bpmFileStartMs));
-        countFailure();
+        bpmAnalyzer.cancel();
+        bpmScan.phase = ScanPhase::GenreStart;
+        return;
     }
 
-    bpmAnalyzer.cancel();
-    bpmScan.fileStarted = false;
-    ++bpmScan.index;  // the next file is reported when its analysis starts
+    case ScanPhase::GenreStart:
+        if (!(all || entry.genre[0] == '\0')) {
+            finishScanFile();
+        } else if (genreClassifier.begin(fs, track.filename)) {
+            bpmScan.phase = ScanPhase::Genre;
+        } else {
+            LOGE(BPM_TAG, "[%u/%u] %s: genre start failed: %s", static_cast<unsigned>(current),
+                 static_cast<unsigned>(bpmScan.count), track.filename, genreClassifier.error());
+            bpmScan.fileFailed = true;
+            finishScanFile();
+        }
+        return;
+
+    case ScanPhase::Genre: {
+        char genre[MUSIC_GENRE_MAX] = {};
+        const MusicGenreClassifier::StepResult result = genreClassifier.step(genre);
+        if (result == MusicGenreClassifier::StepResult::InProgress) return;
+        if (result == MusicGenreClassifier::StepResult::Complete) {
+            LOGI(BPM_TAG, "[%u/%u] %s: genre %s (was '%s')", static_cast<unsigned>(current),
+                 static_cast<unsigned>(bpmScan.count), track.filename, genre, entry.genre);
+            memcpy(entry.genre, genre, sizeof(entry.genre));
+            entry.fileSize = track.fileSize;
+            entry.fileModified = track.fileModified;
+            if (!musicLibrarySave(fs, musicLibrary)) {
+                bpmScan.fileFailed = true;
+                LOGE(BPM_TAG, "%s: genre classified but catalog save failed", track.filename);
+            }
+        } else {
+            LOGE(BPM_TAG, "[%u/%u] %s: genre failed: %s", static_cast<unsigned>(current),
+                 static_cast<unsigned>(bpmScan.count), track.filename, genreClassifier.error());
+            bpmScan.fileFailed = true;
+        }
+        genreClassifier.cancel();
+        finishScanFile();
+        return;
+    }
+    }
 }
 
 // Analysis never overlaps playback: a user-requested scan that is interrupted is discarded,
