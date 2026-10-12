@@ -35,6 +35,11 @@
 - 播放失敗：`audioTask` 回報失敗曲目索引，`controlTask` 跳過該曲並嘗試下一首；所有曲目都失敗時停止自動播放。
 - PPG 無效或暫時失聯：不更新目標 BPM，也不確認新的 Zone；目前歌曲繼續播放。
 
+## OLED 手動選歌
+
+- 主選單的 Songs 列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
+- 曲庫未載入、BPM 分析進行中或沒有曲目時不開啟清單。未分析 BPM 的曲目可手動播放，但不參加自動選曲。
+
 ## OLED 手動 BPM 分析
 
 - 主選單的 BPM Analysis 子選單有 New / unknown BPM 與 Reanalyze all BPM。
@@ -51,14 +56,16 @@ SD 卡內容放在 `testdata/sd_music`，檔名與原檔對照如下（完整曲
 
 | 檔名 | 原檔／來源 | 檔名 | 原檔／來源 |
 | --- | --- | --- | --- |
-| bpm060 | FMA 3264 | bpm132 | music10 |
-| bpm066 | FMA 27552 | bpm135 | music7 |
-| bpm075 | music1 | bpm137 | music5 |
-| bpm080 | music3 | bpm138 | music9 |
-| bpm085 | music4 | bpm147 | music8 |
-| bpm095 | music2 | bpm156 | FMA 1661 |
-| bpm097 | music6 | bpm171 | FMA 1688 |
-| bpm106 | FMA 29602 | bpm117 | FMA 61670 |
+| 001 | FMA 3264 | 010 | music10 |
+| 002 | FMA 27552 | 011 | music7 |
+| 003 | music1 | 012 | music5 |
+| 004 | music3 | 013 | music9 |
+| 005 | music4 | 014 | music8 |
+| 006 | music2 | 015 | FMA 1661 |
+| 007 | music6 | 016 | FMA 1688 |
+| 008 | FMA 29602 | 009 | FMA 61670 |
+
+檔名為流水號（`001.mp3`～`016.mp3`），不再以 BPM 命名；BPM 以 `music_library.json` 為準，值取自 MiniBPM 的分析結果（板上 60 秒分析，002 取自電腦端 MiniBPM，因板上解碼曾失敗），與上方離線估計不同。OLED 播放標頭顯示 `001.mp3(136)`。
 
 ## 本機檢查
 
