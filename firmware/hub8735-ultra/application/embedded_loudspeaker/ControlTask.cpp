@@ -44,6 +44,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::SetVolume: return "SetVolume";
     case UiCommandType::AnalyzeNewOrUnknownBpm: return "AnalyzeNewOrUnknownBpm";
     case UiCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
+    case UiCommandType::PlaySong: return "PlaySong";
     }
     return "?";
 }
@@ -325,6 +326,18 @@ void handleUiCommand(const UiCommandElement& cmd)
         if (!sendAudioCommand(command)) {
             LOGW(TAG, "volume command was not sent");
         }
+        break;
+    case UiCommandType::PlaySong:
+        if (!musicLibraryReady || cmd.songIndex < 0 ||
+            cmd.songIndex >= static_cast<int>(musicLibrary.count)) {
+            LOGW(TAG, "PlaySong ignored: invalid index %d", static_cast<int>(cmd.songIndex));
+            break;
+        }
+        command.command = AudioCommandType::Play;
+        command.songIndex = cmd.songIndex;
+        strncpy(command.filename, musicLibrary.entries[cmd.songIndex].file, sizeof(command.filename) - 1);
+        currentSong = cmd.songIndex;
+        sendManualCommand(command);
         break;
     case UiCommandType::AnalyzeNewOrUnknownBpm:
         startBpmAnalysis(BpmAnalysisMode::NewOrUnknown);

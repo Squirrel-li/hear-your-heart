@@ -2,6 +2,7 @@
 
 #include "debug.h"
 #include "globalData.h"
+#include "music_library.h"
 #include "oled_sh1106.h"
 
 namespace {
@@ -35,6 +36,7 @@ constexpr int16_t STATUS_Y[3] = {40, 48, 56};
 enum TopItem : uint8_t {
     TopMode,
     TopPlay,
+    TopSongs,
     TopStop,
     TopVolume,
     TopBpmAnalysis,
@@ -47,7 +49,8 @@ enum class Screen : uint8_t {
     ModeList,
     VolumeList,
     BpmAnalysisList,
-    BpmStatus
+    BpmStatus,
+    SongList
 };
 
 constexpr uint8_t MODE_COUNT = 3;
@@ -105,6 +108,14 @@ const char* modeName(PlayMode mode)
     }
 }
 
+// The library is rewritten only by audioTask while it scans with playback stopped; the
+// list is not offered then. Never returns 0 while the list is open (cursor math needs >= 1).
+uint8_t songCount()
+{
+    const size_t n = musicLibrary.count > MUSIC_LIBRARY_MAX ? MUSIC_LIBRARY_MAX : musicLibrary.count;
+    return n == 0 ? 1 : static_cast<uint8_t>(n);
+}
+
 uint8_t itemCount()
 {
     switch (screen) {
@@ -112,6 +123,7 @@ uint8_t itemCount()
     case Screen::VolumeList: return VOLUME_COUNT;
     case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
     case Screen::BpmStatus: return MENU_ROWS;
+    case Screen::SongList: return songCount();
     default: return TopCount;
     }
 }
@@ -135,6 +147,7 @@ const char* screenName(Screen value)
     case Screen::VolumeList: return "VolumeList";
     case Screen::BpmAnalysisList: return "BpmAnalysisList";
     case Screen::BpmStatus: return "BpmStatus";
+    case Screen::SongList: return "SongList";
     }
     return "?";
 }
@@ -144,6 +157,7 @@ const char* topItemName(uint8_t item)
     switch (item) {
     case TopMode: return "Mode";
     case TopPlay: return "Play/Pause";
+    case TopSongs: return "Songs";
     case TopStop: return "Stop";
     case TopVolume: return "Volume";
     case TopBpmAnalysis: return "BPM analysis";
@@ -151,12 +165,14 @@ const char* topItemName(uint8_t item)
     return "?";
 }
 
-bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy)
+bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy,
+                 int8_t songIndex = -1)
 {
     UiCommandElement command{};
     command.command = type;
     command.volumePercent = volume;
     command.mode = mode;
+    command.songIndex = songIndex;
     if (uiCmdQueue == nullptr || xQueueSend(uiCmdQueue, &command, 0) != pdPASS) {
         ++droppedCommands;
         LOGW(TAG, "control command queue full; command %d dropped (total dropped %lu)", static_cast<int>(type),
@@ -222,6 +238,12 @@ void activateItem()
     case Screen::BpmStatus:
         backToTop(TopBpmAnalysis);
         break;
+    case Screen::SongList:
+        if (cursor < musicLibrary.count) {
+            sendCommand(UiCommandType::PlaySong, 0, PlayMode::Enjoy, static_cast<int8_t>(cursor));
+        }
+        backToTop(TopSongs);
+        break;
     default:
         switch (cursor) {
         case TopMode:
@@ -230,6 +252,14 @@ void activateItem()
         case TopPlay:
             if (audioState == AudioState::Playing) sendCommand(UiCommandType::Pause);
             else if (audioState == AudioState::Paused) sendCommand(UiCommandType::Resume);
+            break;
+        case TopSongs:
+            if (musicLibraryReady && !musicBpmAnalysisBusy && musicLibrary.count > 0) {
+                openList(Screen::SongList, 0);
+            } else {
+                LOGD(TAG, "song list unavailable (ready=%d busy=%d count=%u)", musicLibraryReady ? 1 : 0,
+                     musicBpmAnalysisBusy ? 1 : 0, static_cast<unsigned>(musicLibrary.count));
+            }
             break;
         case TopStop:
             sendCommand(UiCommandType::Stop);
@@ -286,6 +316,11 @@ void applyUpdate(const UiUpdateElement& update)
         break;
     case UiUpdateType::Audio:
         LOGD(TAG, "audio state=%u file=%s", static_cast<unsigned>(update.audioState), update.filename);
+        if (audioState != static_cast<AudioState>(update.audioState)) {
+            // Starting/stopping playback loads the SD and decoder and is when the bus glitches
+            // were seen; repair the panel shortly after rather than up to REFRESH_MS later.
+            lastRefreshMs = millis() - REFRESH_MS + 300;
+        }
         audioState = static_cast<AudioState>(update.audioState);
         if (update.filename[0] != 0) {
             memcpy(nowPlaying, update.filename, sizeof(nowPlaying));
@@ -325,6 +360,16 @@ void itemLabel(uint8_t item, char* out, size_t size)
         return;
     case Screen::BpmAnalysisList:
         snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : "Reanalyze all BPM");
+        return;
+    case Screen::SongList:
+        if (item >= musicLibrary.count) {
+            snprintf(out, size, "(no songs)");
+        } else if (musicLibrary.entries[item].bpm == 0) {
+            snprintf(out, size, "%.15s --", musicLibrary.entries[item].file);
+        } else {
+            snprintf(out, size, "%.15s %u", musicLibrary.entries[item].file,
+                     static_cast<unsigned>(musicLibrary.entries[item].bpm));
+        }
         return;
     case Screen::BpmStatus:
         switch (item) {
@@ -370,6 +415,9 @@ void itemLabel(uint8_t item, char* out, size_t size)
                  audioState == AudioState::Playing ? "Pause"
                  : audioState == AudioState::Paused ? "Resume" : "Stopped");
         break;
+    case TopSongs:
+        snprintf(out, size, "Songs");
+        break;
     case TopStop:
         snprintf(out, size, "Stop");
         break;
@@ -412,8 +460,15 @@ void draw()
     if (audioState == AudioState::Stopped) {
         oled.print("Stopped");
     } else {
-        snprintf(line, sizeof(line), "%s %.18s",
-                 audioState == AudioState::Playing ? ">" : "||", nowPlaying);
+        // "001.mp3(136)": file name plus its library BPM, "--" when unknown.
+        char bpmText[8] = "--";
+        for (size_t i = 0; i < musicLibrary.count && i < MUSIC_LIBRARY_MAX; ++i) {
+            if (strcmp(musicLibrary.entries[i].file, nowPlaying) != 0) continue;
+            if (musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
+            break;
+        }
+        snprintf(line, sizeof(line), "%s %.12s(%s)",
+                 audioState == AudioState::Playing ? ">" : "||", nowPlaying, bpmText);
         oled.print(line);
     }
     oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
@@ -471,11 +526,14 @@ void draw()
     oled.setCursor(0, STATUS_Y[2]);
     oled.print(line);
 
-    if ((uint32_t)(millis() - lastRefreshMs) >= REFRESH_MS) {
-        oled.refresh();
-        lastRefreshMs = millis();
-    } else {
-        oled.display();
+    const bool full = (uint32_t)(millis() - lastRefreshMs) >= REFRESH_MS;
+    const bool ok = full ? oled.refresh() : oled.display();
+    if (full) lastRefreshMs = millis();
+    if (!ok) {
+        // A failed I2C transfer can leave the panel's address registers off (shifted
+        // or misplaced rows); repair on the next draw instead of waiting for REFRESH_MS.
+        LOGW(TAG, "OLED I2C transfer failed; full refresh scheduled");
+        lastRefreshMs = millis() - REFRESH_MS;
     }
 }
 

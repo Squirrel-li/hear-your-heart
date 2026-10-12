@@ -58,8 +58,10 @@ public:
     // Sends only the 8-pixel-high pages that changed since the last call
     // (all pages when force is set), so a small update costs a few ms, not ~26 ms.
     // A page whose transfer failed is sent again on the next call.
-    void display(bool force = false)
+    // Returns false if any page transfer failed.
+    bool display(bool force = false)
     {
+        bool allOk = true;
         for (uint8_t page = 0; page < HEIGHT / 8; page++) {
             uint8_t* now = &buffer_[page * WIDTH];
             uint8_t* sent = &sent_[page * WIDTH];
@@ -74,21 +76,25 @@ public:
                 ok = wire_->endTransmission() == 0;
             }
             if (ok) memcpy(sent, now, WIDTH);
-            else sent[0] = static_cast<uint8_t>(~now[0]);  // guarantees a resend
+            else {
+                sent[0] = static_cast<uint8_t>(~now[0]);  // guarantees a resend
+                allOk = false;
+            }
         }
+        return allOk;
     }
 
     // Re-sends the registers that decide vertical placement, then every page.
     // A glitched I2C transfer can corrupt them (or a page) and nothing else would
     // ever repair it, so call this periodically.
-    void refresh()
+    bool refresh()
     {
         command(0x40);              // display start line 0
         command(0xD3);
         command(0x00);              // display offset 0
         command(0xA1);              // segment remap
         command(0xC8);              // COM scan direction
-        display(true);
+        return display(true);
     }
 
 private:
