@@ -76,7 +76,7 @@ struct PpgSensorElement {
 };
 
 // Acc 三軸資料
-// payload (msgType 0x02), frame = 15B
+// msgType 0x03 (acc only, 15B) 或 0x02 的前半 (acc+gyro 合併, 21B)
 // | sequence | acc_x | acc_y | acc_z |
 // | 4B       | 2B    | 2B    | 2B    |
 struct AccElement {
@@ -89,7 +89,7 @@ struct AccElement {
 };
 
 // Gyro 三軸資料
-// payload (msgType 0x03), frame = 15B
+// msgType 0x04 (gyro only, 15B) 或 0x02 的後半 (acc+gyro 合併, 21B)
 // | sequence | gyro_x | gyro_y | gyro_z |
 // | 4B       | 2B     | 2B     | 2B     |
 struct GyroElement {
