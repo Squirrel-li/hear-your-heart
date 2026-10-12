@@ -541,10 +541,11 @@ void audioTask(void* parameter)
         LOGE(TAG, "MAX98357 amplifier init FAILED; playback disabled");
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    amp.setShutdownPin(2);  // D22 is the I2S MCLK pin claimed by amp.begin()
+    amp.setShutdownPin(AMP_SD_PIN_RIGHT, AMP_SD_PIN_LEFT);
     amp.setVolume(0.5f);
     musicStorageReady = true;
-    LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pin D2); audio storage ready");
+    LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pins D%u/D%u); audio storage ready",
+         static_cast<unsigned>(AMP_SD_PIN_RIGHT), static_cast<unsigned>(AMP_SD_PIN_LEFT));
 
     for (;;) {
         AudioCmdElement command{};
