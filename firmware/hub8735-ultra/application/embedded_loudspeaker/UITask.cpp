@@ -17,6 +17,7 @@ constexpr uint8_t OLED_ADDRESS = 0x3C;
 constexpr uint8_t PIN_UP = 8;
 constexpr uint8_t PIN_DOWN = 9;
 constexpr uint8_t PIN_OK = 10;
+constexpr uint8_t PIN_BATTERY = 2;  // ADC0, battery through a /2 divider
 
 constexpr uint32_t POLL_MS = 10;
 constexpr uint32_t REDRAW_MS = 50;
@@ -451,6 +452,31 @@ uint32_t clockSeconds()
     return millis() / 1000;
 }
 
+// Single-cell Li-ion, rough discharge curve (battery mV -> %); 0% at 3.4 V leaves headroom for amp load sag; 100% at 4.1 V, where the charger stops. Below BATTERY_MIN_MV the
+// ADC is taken as "no battery connected" and "--" is shown.
+constexpr uint32_t BATTERY_MIN_MV = 2500;
+constexpr uint16_t BATTERY_CURVE[][2] = {{3400, 0},  {3500, 10}, {3600, 25}, {3700, 45},
+                                         {3800, 65}, {3900, 82}, {4000, 93}, {4100, 100}};
+
+// Returns 0..100, or -1 when no battery is detected. Averages a few reads to tame ADC noise.
+int batteryPercent()
+{
+    uint32_t sum = 0;
+    constexpr uint8_t SAMPLES = 8;
+    for (uint8_t i = 0; i < SAMPLES; ++i) sum += analogRead(PIN_BATTERY);
+    const uint32_t mv = (sum / SAMPLES) * 3300UL / 4095UL * 2;  // 12-bit reading, undo the /2 divider
+    if (mv < BATTERY_MIN_MV) return -1;
+    constexpr size_t N = sizeof(BATTERY_CURVE) / sizeof(BATTERY_CURVE[0]);
+    if (mv <= BATTERY_CURVE[0][0]) return 0;
+    for (size_t i = 1; i < N; ++i) {
+        if (mv > BATTERY_CURVE[i][0]) continue;
+        const uint32_t lo = BATTERY_CURVE[i - 1][0], hi = BATTERY_CURVE[i][0];
+        const uint32_t pLo = BATTERY_CURVE[i - 1][1], pHi = BATTERY_CURVE[i][1];
+        return static_cast<int>(pLo + (mv - lo) * (pHi - pLo) / (hi - lo));
+    }
+    return 100;
+}
+
 void draw()
 {
     char line[48];
@@ -474,8 +500,24 @@ void draw()
             if (musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
             break;
         }
-        snprintf(line, sizeof(line), "%s %.12s(%s)",
+        snprintf(line, sizeof(line), "%s %.9s(%s)",
                  audioState == AudioState::Playing ? ">" : "||", nowPlaying, bpmText);
+        oled.print(line);
+    }
+    {
+        // Battery at the far right of the header; refreshed every REFRESH_MS to keep ADC reads cheap.
+        static int percent = -1;
+        static uint32_t lastBatteryMs = 0;
+        static bool batteryRead = false;
+        const uint32_t nowMs = millis();
+        if (!batteryRead || (uint32_t)(nowMs - lastBatteryMs) >= REFRESH_MS) {
+            percent = batteryPercent();
+            lastBatteryMs = nowMs;
+            batteryRead = true;
+        }
+        if (percent < 0) snprintf(line, sizeof(line), "--%%");
+        else snprintf(line, sizeof(line), "%d%%", percent);
+        oled.setCursor(OledSh1106::WIDTH - 6 * static_cast<int16_t>(strlen(line)), HEADER_Y);
         oled.print(line);
     }
     oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
@@ -552,6 +594,7 @@ void UITask(void* parameter) {
     LOGI(TAG, "started; buttons up=D%u down=D%u ok=D%u (INPUT_PULLUP)", static_cast<unsigned>(PIN_UP),
          static_cast<unsigned>(PIN_DOWN), static_cast<unsigned>(PIN_OK));
     for (Button& b : buttons) pinMode(b.pin, INPUT_PULLUP);
+    analogReadResolution(12);
 
     if (!oled.begin()) {
         LOGE(TAG, "OLED (SH1106 @0x%02X) not found on Wire (D3/D4); UI disabled, task exits", OLED_ADDRESS);
