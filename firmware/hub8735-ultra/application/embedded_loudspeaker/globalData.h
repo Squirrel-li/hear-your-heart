@@ -208,13 +208,15 @@ enum class UiCommandType : uint8_t {
     Stop,
     SetVolume,
     AnalyzeNewOrUnknownBpm,
-    ReanalyzeAllBpm
+    ReanalyzeAllBpm,
+    PlaySong
 };
 
 struct UiCommandElement {
     UiCommandType command;
     uint8_t volumePercent;
     PlayMode mode;
+    int8_t songIndex;  // PlaySong: musicLibrary index
 };
 
 // Log 資料
