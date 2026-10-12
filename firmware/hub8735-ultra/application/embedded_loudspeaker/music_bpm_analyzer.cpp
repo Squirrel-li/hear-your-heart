@@ -15,6 +15,7 @@ constexpr uint32_t ANALYSIS_SECONDS = 60;
 constexpr uint32_t MIN_ANALYSIS_SECONDS = 8;
 constexpr unsigned FRAMES_PER_STEP = 8;
 constexpr unsigned MAX_OPERATIONS_PER_STEP = 64;
+constexpr uint32_t MAX_DECODE_ERRORS = 200;  // ~5 s of frames; beyond this the file is not usable
 constexpr uint32_t MIDDLE_START_MIN_BYTES = 2u * 1024 * 1024;
 }
 
@@ -86,7 +87,11 @@ bool MusicBpmAnalyzer::begin(AmebaFatFS& fs, const char* filename)
         if ((header[5] & 0x10) != 0) start += 10;
         id3Found = true;
     }
-    if (fileSize > MIDDLE_START_MIN_BYTES && fileSize / 3 > start) start = fileSize / 3;
+    bool oneThirdIn = false;
+    if (fileSize > MIDDLE_START_MIN_BYTES && fileSize / 3 > start) {
+        start = fileSize / 3;
+        oneThirdIn = true;
+    }
     if (start >= fileSize || !file_.seek(start)) {
         file_.close();
         error_ = "cannot seek to audio data";
@@ -96,7 +101,7 @@ bool MusicBpmAnalyzer::begin(AmebaFatFS& fs, const char* filename)
     }
     LOGD(TAG, "open %s: size=%lu, ID3 %s, start offset=%lu (%s)", filename, static_cast<unsigned long>(fileSize),
          id3Found ? "skipped" : "none", static_cast<unsigned long>(start),
-         start > 0 && !id3Found ? "one-third in" : (start > 0 ? "after ID3" : "file start"));
+         oneThirdIn ? "one-third in" : (start > 0 ? "after ID3" : "file start"));
     decodeErrors_ = 0;
     startOffset_ = start;
 
@@ -179,9 +184,22 @@ MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::step(uint16_t& bpm)
             info.outputSamps <= 0 || info.outputSamps > 2304 ||
             info.outputSamps % info.nChans != 0 ||
             (sampleRate_ != 0 && sampleRate_ != static_cast<uint32_t>(info.samprate))) {
-            LOGW(TAG, "bad frame: rate=%d chans=%d bits=%d samples=%d (expected rate %lu)", info.samprate,
-                 info.nChans, info.bitsPerSample, info.outputSamps, static_cast<unsigned long>(sampleRate_));
-            return fail("unsupported or inconsistent MP3 frame");
+            // Helix can report success yet leave empty frame info (e.g. a Xing/info frame or a
+            // bit-reservoir gap right after a seek). Skip it like a decode error; only give up
+            // when the file keeps producing them.
+            if (++decodeErrors_ > MAX_DECODE_ERRORS) {
+                LOGW(TAG, "bad frame: rate=%d chans=%d bits=%d samples=%d (expected rate %lu); too many errors",
+                     info.samprate, info.nChans, info.bitsPerSample, info.outputSamps,
+                     static_cast<unsigned long>(sampleRate_));
+                return fail("unsupported or inconsistent MP3 frame");
+            }
+            LOGT(TAG, "bad frame skipped: rate=%d chans=%d samples=%d (errors %lu)", info.samprate, info.nChans,
+                 info.outputSamps, static_cast<unsigned long>(decodeErrors_));
+            if (cursor_ == before && bytes_ > 0) {  // nothing consumed: avoid spinning on the same bytes
+                ++cursor_;
+                --bytes_;
+            }
+            continue;
         }
 
         if (analyzer_ == nullptr) {

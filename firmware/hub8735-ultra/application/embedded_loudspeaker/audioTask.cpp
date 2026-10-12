@@ -371,12 +371,7 @@ void advanceBpmScan()
 
     bpmAnalyzer.cancel();
     bpmScan.fileStarted = false;
-    ++bpmScan.index;
-    if (bpmScan.index < bpmScan.count) {
-        reportBpmAnalysis(BpmAnalysisState::Running,
-                          static_cast<uint8_t>(bpmScan.index + 1),
-                          bpmScan.tracks[bpmScan.index].filename);
-    }
+    ++bpmScan.index;  // the next file is reported when its analysis starts
 }
 
 // Analysis never overlaps playback: a user-requested scan that is interrupted is discarded,
