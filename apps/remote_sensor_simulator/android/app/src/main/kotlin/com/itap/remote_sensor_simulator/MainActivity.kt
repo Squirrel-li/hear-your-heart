@@ -316,7 +316,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun notify(bytes: ByteArray?): Map<String, Any?> {
-        if (bytes == null || (bytes.size != 20 && bytes.size != 15)) return resultMap(false, "invalid_payload")
+        if (bytes == null || (bytes.size != 20 && bytes.size != 21 && bytes.size != 15)) return resultMap(false, "invalid_payload")
         if (subscribedDevices.isEmpty()) return resultMap(false, "not_connected")
 
         val characteristic = gattServer

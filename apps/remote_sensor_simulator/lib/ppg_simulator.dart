@@ -74,8 +74,9 @@ class PpgDataLoader {
 
       final type = parsed[4];
       final frameLength = switch (type) {
-        0x01 => 20,
-        0x02 || 0x03 => 15,
+        0x01 => 20,      // PPG
+        0x02 => 21,      // acc + gyro 合併
+        0x03 || 0x04 => 15, // acc / gyro 單獨
         _ => 0,
       };
       final legacyPpgLength = type == 0x01 && fields.length == 21;
@@ -90,43 +91,21 @@ class PpgDataLoader {
         timestamp: _readUint32(bytes, 0),
         sequence: _readUint32(bytes, 5),
       );
-      if (frames.isEmpty) {
-        if (frame.type == 0x03) {
-          throw FormatException(source.label + ': IMU 資料必須先送 Acc');
-        }
-      } else {
+      if (frames.isNotEmpty) {
         final previous = frames.last;
-        if (frames.first.type == 0x01) {
-          if (frame.type != 0x01) {
-            throw FormatException(source.label + ': PPG 資料不能混入其他 frame');
-          }
-          if (frame.timestamp <= previous.timestamp) {
-            throw FormatException(source.label + ': timestamp 必須遞增');
-          }
-          if (frame.sequence != previous.sequence + 1) {
-            throw FormatException(source.label + ': sequence 必須連續遞增');
-          }
-        } else if (previous.type == 0x02 && frame.type == 0x03) {
-          if (frame.timestamp != previous.timestamp || frame.sequence != previous.sequence) {
-            throw FormatException(source.label + ': Acc/Gyro 必須共用 timestamp 與 sequence');
-          }
-        } else if (previous.type == 0x03 && frame.type == 0x02) {
-          if (frame.timestamp <= previous.timestamp) {
-            throw FormatException(source.label + ': 下一筆 IMU timestamp 必須遞增');
-          }
-          if (frame.sequence != previous.sequence + 1) {
-            throw FormatException(source.label + ': 下一筆 IMU sequence 必須連續遞增');
-          }
-        } else {
-          throw FormatException(source.label + ': IMU frame 必須依 Acc、Gyro 順序成對');
+        if (frame.type != frames.first.type) {
+          throw FormatException(source.label + ': 同一份資料不能混入不同 msgType');
+        }
+        if (frame.timestamp <= previous.timestamp) {
+          throw FormatException(source.label + ': timestamp 必須遞增');
+        }
+        if (frame.sequence != previous.sequence + 1) {
+          throw FormatException(source.label + ': sequence 必須連續遞增');
         }
       }
       frames.add(frame);
     }
     if (frames.isEmpty) throw FormatException(source.label + ': 沒有資料');
-    if (frames.first.type == 0x02 && frames.last.type != 0x03) {
-      throw FormatException(source.label + ': 最後一筆 IMU 缺少 Gyro frame');
-    }
     return frames;
   }
 }
