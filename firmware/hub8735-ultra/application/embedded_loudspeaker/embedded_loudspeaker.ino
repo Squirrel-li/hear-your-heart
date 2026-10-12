@@ -32,6 +32,12 @@ volatile bool musicBpmAnalysisBusy = false;
 
 void setup()
 {
+    // Hold both amps in shutdown from the very start of boot.
+    pinMode(AMP_SD_PIN_RIGHT, OUTPUT);
+    digitalWrite(AMP_SD_PIN_RIGHT, LOW);
+    pinMode(AMP_SD_PIN_LEFT, OUTPUT);
+    digitalWrite(AMP_SD_PIN_LEFT, LOW);
+
     // 初始化串口
     #ifdef DEBUG_MODE
     Serial.begin(2000000);

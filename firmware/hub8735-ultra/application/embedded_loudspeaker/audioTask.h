@@ -14,6 +14,11 @@
 
 
 
+// SD_MODE pins of the two MAX98357 amps (borrowed SPI1 MISO/CS pins). setup() drives them LOW
+// at boot so the amps stay in shutdown until audioTask releases them for playback.
+constexpr uint8_t AMP_SD_PIN_RIGHT = 18;
+constexpr uint8_t AMP_SD_PIN_LEFT = 21;
+
 void audioTask(void* parameter);
 
 #endif // AUDIO_TASK_H
