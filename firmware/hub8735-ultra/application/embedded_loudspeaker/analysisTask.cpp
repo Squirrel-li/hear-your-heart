@@ -120,12 +120,12 @@ void analysisTask(void* parameter)
 
         const uint32_t now = millis();
         const bool fresh = haveValidPpg &&
-            (uint32_t)(now - latest.hub_rx_time_ms) <= 6000u && bpmState.hrmax != 0;
+            (uint32_t)(now - latest.hub_rx_time_ms) <= 15000u && bpmState.hrmax != 0;
         if (fresh != wasFresh) {
             if (fresh) {
                 LOGI("ANALYSIS", "sensor data fresh again (HR=%u)", static_cast<unsigned>(latest.heartRateBpm));
             } else if (haveValidPpg && bpmState.hrmax != 0) {
-                LOGW("ANALYSIS", "sensor data stale (> 6 s since last valid sample); keeping last target BPM=%u",
+                LOGW("ANALYSIS", "sensor data stale (> 15 s since last valid sample); keeping last target BPM=%u",
                      static_cast<unsigned>(lastQueuedBpm));
             }
             wasFresh = fresh;
