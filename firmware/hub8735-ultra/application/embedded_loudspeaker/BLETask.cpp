@@ -109,7 +109,13 @@ bool connectSensor()
     LOGI(TAG, "attempt #%lu: scanning for '%s' (%lu ms)",
          static_cast<unsigned long>(connectAttempts), TARGET_NAME,
          static_cast<unsigned long>(BLE_SCAN_MS));
-    BLE.configScan()->startScan(BLE_SCAN_MS);
+    // startScan(ms) always waits the full duration; stop as soon as the target is seen.
+    BLE.configScan()->startScan();
+    for (uint32_t waited = 0; waited < BLE_SCAN_MS && !targetFound; waited += 20) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    BLE.configScan()->stopScan();
+    vTaskDelay(pdMS_TO_TICKS(100));  // same settle time the library's timed scan leaves
     if (!targetFound) {
         LOGW(TAG, "target '%s' not found", TARGET_NAME);
         return false;
@@ -198,7 +204,8 @@ void scanCB(T_LE_CB_DATA* p_data)
     foundDevice.parseScanInfo(p_data);
     if (foundDevice.hasName()) {
         if (foundDevice.getName() == String(TARGET_NAME)) {
-            LOGI("BLE", "scan: found target at %s", foundDevice.getAddr().str());
+            // Every advertisement packet lands here; log once per scan window.
+            if (!targetFound) LOGI("BLE", "scan: found target at %s", foundDevice.getAddr().str());
             targetDevice = foundDevice;
             targetFound = true;
         }
