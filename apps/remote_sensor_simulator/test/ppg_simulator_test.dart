@@ -6,36 +6,23 @@ import '../lib/ppg_simulator.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('loads PPG and paired Acc/Gyro frames in protocol format', () async {
+  test('loads PPG (0x01) and combined acc+gyro (0x02) frames in protocol format', () async {
     final dataSets = await PpgDataLoader.load(rootBundle.loadString);
 
     expect(dataSets, hasLength(9));
     expect(dataSets.first.frames, hasLength(51));
+    var step = 0;
     for (final dataSet in dataSets) {
-      if (dataSet.frames.first.type == 0x01) {
-        expect(dataSet.frames, hasLength(51));
-        expect(dataSet.frames.every((frame) => frame.bytes.length == 20), isTrue);
-        for (var i = 1; i < dataSet.frames.length; i++) {
-          expect(dataSet.frames[i].type, 0x01);
-          expect(dataSet.frames[i].timestamp - dataSet.frames[i - 1].timestamp, 5000);
-          expect(dataSet.frames[i].sequence - dataSet.frames[i - 1].sequence, 1);
-        }
-      } else {
-        expect(dataSet.frames, hasLength(102));
-        for (var i = 0; i < dataSet.frames.length; i += 2) {
-          final acc = dataSet.frames[i];
-          final gyro = dataSet.frames[i + 1];
-          expect(acc.type, 0x02);
-          expect(gyro.type, 0x03);
-          expect(acc.bytes.length, 15);
-          expect(gyro.bytes.length, 15);
-          expect(gyro.timestamp, acc.timestamp);
-          expect(gyro.sequence, acc.sequence);
-          if (i + 2 < dataSet.frames.length) {
-            expect(dataSet.frames[i + 2].timestamp - gyro.timestamp, 1000);
-            expect(dataSet.frames[i + 2].sequence - gyro.sequence, 1);
-          }
-        }
+      final type = dataSet.frames.first.type;
+      final length = type == 0x01 ? 20 : 21;
+      step = type == 0x01 ? 5000 : 1000;
+      expect(dataSet.frames, hasLength(type == 0x01 ? 51 : 60));
+      for (var i = 0; i < dataSet.frames.length; i++) {
+        expect(dataSet.frames[i].type, type);
+        expect(dataSet.frames[i].bytes.length, length);
+        if (i == 0) continue;
+        expect(dataSet.frames[i].timestamp - dataSet.frames[i - 1].timestamp, step);
+        expect(dataSet.frames[i].sequence - dataSet.frames[i - 1].sequence, 1);
       }
     }
   });
