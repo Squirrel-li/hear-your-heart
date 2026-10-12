@@ -9,18 +9,18 @@
 
 | UUID | 屬性 | 方向 | 用途 |
 |---|---|---|---|
-| `FFF0` | Service | — | — |
-| `FFF1` | Notify（含 CCCD） | sensor → hub | 資料 frame |
-| `FFF2` | Write／Write Without Response | hub → sensor | hub 下傳 |
+| `524CACC0-3C17-D293-8E48-14FE2E4DA212` | Service | — | — |
+| `D002` | Notify（含 CCCD） | sensor → hub | 資料 frame |
+| `D001` | Write／Write Without Response | hub → sensor | hub 下傳 |
 
 ## 流程
 
 1. sensor 廣播 → hub 依名稱連線。
-2. hub 探索 `FFF0`／`FFF1`／`FFF2`，並將 `FFF1` 的 CCCD 寫成 `0x0001`。
+2. hub 探索 `524CACC0-3C17-D293-8E48-14FE2E4DA212`／`D002`／`D001`，並將 `D002` 的 CCCD 寫成 `0x0001`。
 3. sensor 確認 notify 已開啟後才送資料；一個 notify 放一個 frame，不加長度欄位。
 4. 斷線後 sensor 重新廣播，hub 會自動重連。
 
-## Frame（FFF1）
+## Frame（D002）
 
 ```
 | sensor_time_ms 4B | msgType 1B | payload |
