@@ -78,31 +78,32 @@ MusicLibrary musicLibrary{};
 int main(void)
 {
     const char* json = "{\"version\":1,\"songs\":["
-        "{\"file\":\"bpm060.mp3\",\"bpm\":60},{\"file\":\"bpm066.mp3\",\"bpm\":66},"
-        "{\"file\":\"bpm075.mp3\",\"bpm\":75},{\"file\":\"bpm080.mp3\",\"bpm\":80},"
-        "{\"file\":\"bpm085.mp3\",\"bpm\":85},{\"file\":\"bpm095.mp3\",\"bpm\":95},"
-        "{\"file\":\"bpm097.mp3\",\"bpm\":97},{\"file\":\"bpm106.mp3\",\"bpm\":106},"
-        "{\"file\":\"bpm117.mp3\",\"bpm\":117},{\"file\":\"bpm132.mp3\",\"bpm\":132},"
-        "{\"file\":\"bpm135.mp3\",\"bpm\":135},{\"file\":\"bpm137.mp3\",\"bpm\":137},"
-        "{\"file\":\"bpm138.mp3\",\"bpm\":138},{\"file\":\"bpm147.mp3\",\"bpm\":147},"
-        "{\"file\":\"bpm156.mp3\",\"bpm\":156},{\"file\":\"bpm171.mp3\",\"bpm\":171}]}";
+        "{\"file\":\"001.mp3\",\"bpm\":136},{\"file\":\"002.mp3\",\"bpm\":143},"
+        "{\"file\":\"003.mp3\",\"bpm\":100},{\"file\":\"004.mp3\",\"bpm\":120},"
+        "{\"file\":\"005.mp3\",\"bpm\":85},{\"file\":\"006.mp3\",\"bpm\":95},"
+        "{\"file\":\"007.mp3\",\"bpm\":97},{\"file\":\"008.mp3\",\"bpm\":89},"
+        "{\"file\":\"009.mp3\",\"bpm\":117},{\"file\":\"010.mp3\",\"bpm\":111},"
+        "{\"file\":\"011.mp3\",\"bpm\":135},{\"file\":\"012.mp3\",\"bpm\":103},"
+        "{\"file\":\"013.mp3\",\"bpm\":138},{\"file\":\"014.mp3\",\"bpm\":111},"
+        "{\"file\":\"015.mp3\",\"bpm\":160},{\"file\":\"016.mp3\",\"bpm\":113}]}";
     assert(music_json::parse(json, musicLibrary) && musicLibrary.count == 16);
     musicLibrary.count = 0;
     assert(songForStart(100, -1) == -1);  // 空表
     assert(music_json::parse(json, musicLibrary));
-    assert(nextMatchingSong(135, -1) == 9);
-    assert(nextMatchingSong(135, 9) == 10);
-    assert(nextMatchingSong(135, 10) == 11);
-    assert(nextMatchingSong(135, 12) == 9);
+    assert(nextMatchingSong(135, -1) == 0);
+    assert(nextMatchingSong(135, 0) == 10);
+    assert(nextMatchingSong(135, 10) == 12);
+    assert(nextMatchingSong(135, 12) == 0);
     assert(nextMatchingSong(70, -1) == -1);
-    assert(closestSong(70, -1) == 1);
+    assert(closestSong(70, -1) == 4);
     assert(closestSong(0, -1) == -1);
-    assert(songForStart(70, -1) == 1);
-    assert(nextMatchingSong(60, -1) == 0);
-    assert(nextMatchingSong(117, -1) == 8);
-    assert(nextMatchingSong(171, -1) == 15);
+    assert(songForStart(70, -1) == 4);
+    assert(nextMatchingSong(85, -1) == 4);
+    assert(nextMatchingSong(117, -1) == 3);
+    assert(nextMatchingSong(160, -1) == 14);
+    assert(closestSong(171, -1) == 14);
     assert(songAfterFinish(70, 4) == 4);
-    assert(songAfterFinish(135, 4) == 9);
+    assert(songAfterFinish(135, 4) == 10);
     const char* unknown = "{\"songs\":[{\"file\":\"unknown.mp3\"}]}";
     assert(music_json::parse(unknown, musicLibrary));
     assert(songForStart(100, -1) == -1);  // Unknown BPM is not selectable.
