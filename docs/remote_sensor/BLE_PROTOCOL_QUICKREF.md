@@ -7,11 +7,11 @@
 - sensor = Peripheral，廣播名稱 `BLE_sensor_ITAP`；不配對、不加密。
 - 多位元組欄位一律 Big-endian。
 
-| UUID | 屬性 | 方向 | 用途 |
-|---|---|---|---|
-| `524CACC0-3C17-D293-8E48-14FE2E4DA212` | Service | — | — |
-| `D002` | Notify（含 CCCD） | sensor → hub | 資料 frame |
-| `D001` | Write／Write Without Response | hub → sensor | hub 下傳 |
+| UUID                                     | 屬性                          | 方向          | 用途       |
+| ---------------------------------------- | ----------------------------- | ------------- | ---------- |
+| `524CACC0-3C17-D293-8E48-14FE2E4DA212` | Service                       | —            | —         |
+| `D002`                                 | Notify（含 CCCD）             | sensor → hub | 資料 frame |
+| `D001`                                 | Write／Write Without Response | hub → sensor | hub 下傳   |
 
 ## 流程
 
@@ -27,7 +27,15 @@
 ```
 
 - `sensor_time_ms`：uint32，sensor 時鐘，取樣時刻（ms）。
-- `msgType`：`0x01` PPG、`0x02` Acc、`0x03` Gyro。
+- `msgType`：
+
+| 值 | 名稱 | 長度 | 說明 |
+| --- | --- | --- | --- |
+| `0x00` | cmd | — | 預留編號，內容、方向（sensor ↔ hub）尚未定義；收到時忽略。 |
+| `0x01` | PPG | 20B | 見下。 |
+| `0x02` | acc + gyro | 21B | 同一次取樣的 Acc 與 Gyro 合併成一個 frame，sensor 目前送這個。 |
+| `0x03` | Acc | 15B | 只含 Acc，hub 可解析，sensor 目前不送。 |
+| `0x04` | Gyro | 15B | 只含 Gyro，hub 可解析，sensor 目前不送。 |
 
 PPG（20B）：
 
@@ -37,11 +45,13 @@ PPG（20B）：
 
 - `status`：0 finger off、1 finger on、2 有效資料。
 
-Acc（15B）與 Gyro（15B），同一次取樣各送一筆；Acc 先送，兩筆的 `time`、`sequence` 相同：
+acc + gyro（21B）：
 
 ```
-| time 4B | 02 | sequence 4B | acc_x | acc_y | acc_z |      （各軸 int16 原始 counts）
-| time 4B | 03 | sequence 4B | gyro_x | gyro_y | gyro_z |
+| time 4B | 02 | sequence 4B | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z |      （各軸 int16 原始 counts）
 ```
 
-- 預設量程 ±8 g、±1000 dps。兩個 frame 都在預設 MTU 的 20B 內，不需調大 MTU。
+單獨的 Acc（`03`）與 Gyro（`04`）各 15B，格式為 `| time 4B | 03/04 | sequence 4B | x | y | z |`。
+
+- 預設量程 ±8 g、±1000 dps。
+- 21B 的 `02` frame 超過預設 MTU 的 20B 有效載荷，central 需先協商 MTU ≥ 24（BM7701 以 25B notify 實測可行，見 `.agents/MEMORY.md`）；未協商時 sensor 端會被截成 20B。
