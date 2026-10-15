@@ -40,7 +40,7 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | `0x00` cmd、`0x01` PPG、`0x02` Acc、`0x03` Gyro        |
+| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc、`0x03` Gyro）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
 | `payload`          | —     | 依 msgType 決定（第 4–6 節）                               |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
