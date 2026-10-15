@@ -47,8 +47,20 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
     case UiCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
     case UiCommandType::PlaySong: return "PlaySong";
+    case UiCommandType::SetPpgSource: return "SetPpgSource";
+    case UiCommandType::SetImuSource: return "SetImuSource";
     }
     return "?";
+}
+
+void sendAnalysisSource(AnalysisCmdType type, SensorSource source)
+{
+    AnalysisCmdElement cmd{};
+    cmd.command = type;
+    cmd.source = source;
+    if (analysisCmdQueue == nullptr || xQueueSend(analysisCmdQueue, &cmd, pdMS_TO_TICKS(20)) != pdPASS) {
+        LOGW(TAG, "analysis command was not sent");
+    }
 }
 
 const char* modeLabel(PlayMode mode)
@@ -351,6 +363,12 @@ void handleUiCommand(const UiCommandElement& cmd)
         command.command = AudioCommandType::CancelBpmAnalysis;
         if (!sendAudioCommand(command)) LOGW(TAG, "cancel analysis command was not sent");
         break;
+    case UiCommandType::SetPpgSource:
+        sendAnalysisSource(AnalysisCmdType::SetPpgSource, cmd.source);
+        break;
+    case UiCommandType::SetImuSource:
+        sendAnalysisSource(AnalysisCmdType::SetMotionSource, cmd.source);
+        break;
     }
 }
 void handleSerialCommand(String input)
@@ -362,6 +380,21 @@ void handleSerialCommand(String input)
     AudioCmdElement command{};
     if (input.equalsIgnoreCase("auto")) {
         enableAutomaticMode(PlayMode::Enjoy);
+    } else if (input.startsWith("src ")) {
+        // src ppg|motion chest|watch|local
+        const bool ppg = input.startsWith("src ppg ");
+        const bool motion = input.startsWith("src motion ");
+        SensorSource source = SensorSource::Chest;
+        bool valid = true;
+        if (input.endsWith(" chest")) source = SensorSource::Chest;
+        else if (input.endsWith(" watch")) source = SensorSource::Watch;
+        else if (input.endsWith(" local")) source = SensorSource::Local;
+        else valid = false;
+        if ((!ppg && !motion) || !valid) {
+            LOGW(TAG, "serial: usage: src ppg|motion chest|watch|local");
+            return;
+        }
+        sendAnalysisSource(ppg ? AnalysisCmdType::SetPpgSource : AnalysisCmdType::SetMotionSource, source);
     } else if (input.startsWith("play ")) {
         String filename = input.substring(5);
         filename.trim();

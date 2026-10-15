@@ -20,6 +20,7 @@ extern QueueHandle_t audioCmdQueue;		// Audio command queue
 extern QueueHandle_t audioPlaybackEventQueue;	// Playback events for controlTask
 extern QueueHandle_t uiUpdateQueue;		// UI update queue
 extern QueueHandle_t uiCmdQueue;		// Menu commands from UITask to controlTask
+extern QueueHandle_t analysisCmdQueue;	// Commands from controlTask to analysisTask
 extern QueueHandle_t bleTxQueue;		// BLE transmission queue
 
 bool appQueuesInit();
@@ -43,6 +44,20 @@ struct UserInfo {
 };
 
 extern UserInfo userInfo;
+
+// 感測資料來源。BLE frame 的 msgType byte：高 4 bit = source，低 4 bit = msgType。
+//   Chest (0): 胸帶（BM7701 / N76E003 現有格式，不另外處理）
+//   Watch (1): 手錶端（協定保留，尚無對應裝置）
+//   Local (2): 直接接在 Hub 上的 BMH08002-4 + LSM6DS3；不經 BLE，不會出現在 frame 裡
+enum class SensorSource : uint8_t {
+    Chest = 0,
+    Watch = 1,
+    Local = 2
+};
+
+// 目前選用的來源：analysisTask 寫入，BLETask 讀取（BLE 端只收與選擇相同 source 的 frame）。
+extern volatile SensorSource activePpgSource;
+extern volatile SensorSource activeImuSource;
 
 // Big-endian format
 
@@ -104,6 +119,17 @@ struct GyroElement {
 struct TargetBpmResult {
     uint16_t targetBpm;
     uint8_t zone;
+};
+
+// controlTask -> analysisTask 的指令
+enum class AnalysisCmdType : uint8_t {
+    SetPpgSource,
+    SetMotionSource  // acc + gyro
+};
+
+struct AnalysisCmdElement {
+    AnalysisCmdType command;
+    SensorSource source;
 };
 
 enum class AudioPlaybackEventType : uint8_t {
@@ -211,7 +237,9 @@ enum class UiCommandType : uint8_t {
     AnalyzeNewOrUnknownBpm,
     ReanalyzeAllBpm,
     CancelBpmAnalysis,
-    PlaySong
+    PlaySong,
+    SetPpgSource,
+    SetImuSource
 };
 
 struct UiCommandElement {
@@ -219,6 +247,7 @@ struct UiCommandElement {
     uint8_t volumePercent;
     PlayMode mode;
     int8_t songIndex;  // PlaySong: musicLibrary index
+    SensorSource source;  // SetPpgSource / SetImuSource
 };
 
 // Log 資料

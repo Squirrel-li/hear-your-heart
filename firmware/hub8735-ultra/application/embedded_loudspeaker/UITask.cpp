@@ -41,6 +41,7 @@ enum TopItem : uint8_t {
     TopStop,
     TopVolume,
     TopBpmAnalysis,
+    TopSource,
     TopCount
 };
 
@@ -51,10 +52,13 @@ enum class Screen : uint8_t {
     VolumeList,
     BpmAnalysisList,
     BpmStatus,
-    SongList
+    SongList,
+    SourceList     // PPG / IMU (OK cycles Chest/Watch/Local) / Back
 };
 
 constexpr uint8_t MODE_COUNT = 3;
+constexpr uint8_t SOURCE_LIST_COUNT = 3;
+constexpr uint8_t SOURCE_COUNT = 3;  // Chest, Watch, Local
 constexpr uint8_t BPM_ANALYSIS_COUNT = 2;
 constexpr uint8_t VOLUME_STEP = 10;
 constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
@@ -72,6 +76,10 @@ Button buttons[3] = {{PIN_UP, 0, false}, {PIN_DOWN, 0, false}, {PIN_OK, 0, false
 Screen screen = Screen::Top;
 uint8_t cursor = TopMode;
 uint8_t menuTop = 0;
+
+// Mirrors the choice sent to analysisTask (both start on Chest).
+SensorSource ppgSource = SensorSource::Chest;
+SensorSource imuSource = SensorSource::Chest;
 
 // Reported by controlTask / audioTask.
 PlayMode playMode = PlayMode::Enjoy;
@@ -100,6 +108,11 @@ bool haveGyro = false;
 int16_t acc[3] = {0, 0, 0};
 int16_t gyro[3] = {0, 0, 0};
 
+const char* sourceLabel(SensorSource source)
+{
+    return source == SensorSource::Chest ? "Chest" : source == SensorSource::Watch ? "Watch" : "Local";
+}
+
 const char* modeName(PlayMode mode)
 {
     switch (mode) {
@@ -125,6 +138,7 @@ uint8_t itemCount()
     case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
     case Screen::BpmStatus: return MENU_ROWS;
     case Screen::SongList: return songCount();
+    case Screen::SourceList: return SOURCE_LIST_COUNT;
     default: return TopCount;
     }
 }
@@ -149,6 +163,7 @@ const char* screenName(Screen value)
     case Screen::BpmAnalysisList: return "BpmAnalysisList";
     case Screen::BpmStatus: return "BpmStatus";
     case Screen::SongList: return "SongList";
+    case Screen::SourceList: return "SourceList";
     }
     return "?";
 }
@@ -162,15 +177,17 @@ const char* topItemName(uint8_t item)
     case TopStop: return "Stop";
     case TopVolume: return "Volume";
     case TopBpmAnalysis: return "BPM analysis";
+    case TopSource: return "Source";
     }
     return "?";
 }
 
 bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy,
-                 int8_t songIndex = -1)
+                 int8_t songIndex = -1, SensorSource source = SensorSource::Chest)
 {
     UiCommandElement command{};
     command.command = type;
+    command.source = source;
     command.volumePercent = volume;
     command.mode = mode;
     command.songIndex = songIndex;
@@ -250,6 +267,20 @@ void activateItem()
         }
         backToTop(TopSongs);
         break;
+    case Screen::SourceList:
+        if (cursor >= 2) {
+            backToTop(TopSource);
+        } else {
+            // OK cycles Chest -> Watch -> Local in place.
+            const bool isPpg = cursor == 0;
+            SensorSource& current = isPpg ? ppgSource : imuSource;
+            const SensorSource next = static_cast<SensorSource>((static_cast<uint8_t>(current) + 1) % SOURCE_COUNT);
+            if (sendCommand(isPpg ? UiCommandType::SetPpgSource : UiCommandType::SetImuSource, 0, PlayMode::Enjoy, -1,
+                            next)) {
+                current = next;
+            }
+        }
+        break;
     default:
         switch (cursor) {
         case TopMode:
@@ -283,6 +314,9 @@ void activateItem()
             } else {
                 openList(Screen::BpmAnalysisList, 0);
             }
+            break;
+        case TopSource:
+            openList(Screen::SourceList, 0);
             break;
         }
         break;
@@ -367,6 +401,11 @@ void itemLabel(uint8_t item, char* out, size_t size)
     case Screen::BpmAnalysisList:
         snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : "Reanalyze all BPM");
         return;
+    case Screen::SourceList:
+        if (item >= 2) snprintf(out, size, "OK: Back");
+        else snprintf(out, size, "%s: %s", item == 0 ? "PPG" : "IMU",
+                      sourceLabel(item == 0 ? ppgSource : imuSource));
+        return;
     case Screen::SongList:
         if (item >= musicLibrary.count) {
             snprintf(out, size, "(no songs)");
@@ -439,6 +478,9 @@ void itemLabel(uint8_t item, char* out, size_t size)
             snprintf(out, size, "BPM: running");
         else
             snprintf(out, size, "BPM Analysis");
+        break;
+    case TopSource:
+        snprintf(out, size, "Source");
         break;
     default:
         out[0] = 0;
