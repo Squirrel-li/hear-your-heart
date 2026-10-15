@@ -82,10 +82,9 @@ void handleAcc(const BleFrameElement& frame, uint32_t sensorTimeMs, uint32_t seq
     accElement.acc_y = readInt16BE(&xyz[2]);
     accElement.acc_z = readInt16BE(&xyz[4]);
     ++statsAcc;
-    if (xQueueSend(accSensorQueue, &accElement, 0) == pdPASS) {
-        LOGT(TAG, "Acc -> analysis: %d,%d,%d sequence=%lu", accElement.acc_x, accElement.acc_y,
-             accElement.acc_z, static_cast<unsigned long>(accElement.sequence));
-    } else {
+    LOGD(TAG, "Acc sensor_ms=%lu sequence=%lu x=%d y=%d z=%d", static_cast<unsigned long>(sensorTimeMs),
+         static_cast<unsigned long>(sequence), accElement.acc_x, accElement.acc_y, accElement.acc_z);
+    if (xQueueSend(accSensorQueue, &accElement, 0) != pdPASS) {
         LOGW(TAG, "Acc queue full, sample dropped (sequence=%lu)",
              static_cast<unsigned long>(accElement.sequence));
     }
@@ -109,10 +108,9 @@ void handleGyro(const BleFrameElement& frame, uint32_t sensorTimeMs, uint32_t se
     gyroElement.gyro_y = readInt16BE(&xyz[2]);
     gyroElement.gyro_z = readInt16BE(&xyz[4]);
     ++statsGyro;
-    if (xQueueSend(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
-        LOGT(TAG, "Gyro -> analysis: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
-             gyroElement.gyro_z, static_cast<unsigned long>(gyroElement.sequence));
-    } else {
+    LOGD(TAG, "Gyro sensor_ms=%lu sequence=%lu x=%d y=%d z=%d", static_cast<unsigned long>(sensorTimeMs),
+         static_cast<unsigned long>(sequence), gyroElement.gyro_x, gyroElement.gyro_y, gyroElement.gyro_z);
+    if (xQueueSend(gyroSensorQueue, &gyroElement, 0) != pdPASS) {
         LOGW(TAG, "Gyro queue full, sample dropped (sequence=%lu)",
              static_cast<unsigned long>(gyroElement.sequence));
     }
@@ -374,7 +372,7 @@ void BLETask(void* parameter) {
 
         BleFrameElement msgElement;
         if (xQueueReceive(bleRxFrameQueue, &msgElement, 0) == pdPASS) {
-            if (msgElement.length >= 5 && msgElement.data[4] == 0x00) { // cmd: reserved, payload not defined yet
+            if (msgElement.length >= 5 && (msgElement.data[4] & 0x0F) == 0x00) { // cmd: reserved, payload not defined yet
                 LOGD(TAG, "cmd frame ignored (len=%u)", static_cast<unsigned>(msgElement.length));
                 continue;
             }
@@ -388,7 +386,8 @@ void BLETask(void* parameter) {
                 (static_cast<uint32_t>(msgElement.data[1]) << 16) |
                 (static_cast<uint32_t>(msgElement.data[2]) << 8) |
                 static_cast<uint32_t>(msgElement.data[3]);
-            uint8_t msgType = msgElement.data[4];
+            const uint8_t frameSource = msgElement.data[4] >> 4;  // 0 chest, 1 watch; Local never travels over BLE
+            const uint8_t msgType = msgElement.data[4] & 0x0F;
             uint32_t sequence =
                 (static_cast<uint32_t>(msgElement.data[5]) << 24) |
                 (static_cast<uint32_t>(msgElement.data[6]) << 16) |
@@ -397,7 +396,18 @@ void BLETask(void* parameter) {
             LOGT(TAG, "frame msgType=%u sequence=%lu sensor_ms=%lu len=%u", static_cast<unsigned>(msgType),
                  static_cast<unsigned long>(sequence), static_cast<unsigned long>(sensor_time_ms),
                  static_cast<unsigned>(msgElement.length));
-            
+
+            if (frameSource > static_cast<uint8_t>(SensorSource::Watch)) {
+                LOGW(TAG, "invalid frame source=%u dropped", static_cast<unsigned>(frameSource));
+                ++statsBad;
+                continue;
+            }
+            // 只收與目前選擇相同 source 的 PPG / IMU frame；選的是 Local 時 BLE 端全丟。
+            if ((msgType == 0x01 && frameSource != static_cast<uint8_t>(activePpgSource)) ||
+                (msgType >= 0x02 && msgType <= 0x04 && frameSource != static_cast<uint8_t>(activeImuSource))) {
+                continue;
+            }
+
             if (msgType == 0x01) { // PPG sensor
                 if (msgElement.length < 20) {
                     LOGW(TAG, "PPG frame too short: len=%u (need >= 20)", static_cast<unsigned>(msgElement.length));
@@ -418,12 +428,15 @@ void BLETask(void* parameter) {
                 ppgElement.ppg1 = (msgElement.data[16] << 8) | msgElement.data[17];
                 ppgElement.ppg2 = (msgElement.data[18] << 8) | msgElement.data[19];
                 ++statsPpg;
-                if (xQueueSend(ppgSensorQueue, &ppgElement, 0) == pdPASS) {
-                    LOGT(TAG, "PPG -> analysis: HR=%u SpO2=%u status=%u bpi=%u hrv=%u sequence=%lu",
-                         static_cast<unsigned>(ppgElement.heartRateBpm), static_cast<unsigned>(ppgElement.SpO2),
-                         static_cast<unsigned>(ppgElement.status), static_cast<unsigned>(ppgElement.bpi),
-                         static_cast<unsigned>(ppgElement.hrv), static_cast<unsigned long>(ppgElement.sequence));
-                } else {
+                LOGD(TAG, "PPG sensor_ms=%lu sequence=%lu status=%u SpO2=%u HR=%u bpi=%u hrv=%u amp=%u systole=%u "
+                          "ppg1=%u ppg2=%u",
+                     static_cast<unsigned long>(sensor_time_ms), static_cast<unsigned long>(sequence),
+                     static_cast<unsigned>(ppgElement.status), static_cast<unsigned>(ppgElement.SpO2),
+                     static_cast<unsigned>(ppgElement.heartRateBpm), static_cast<unsigned>(ppgElement.bpi),
+                     static_cast<unsigned>(ppgElement.hrv), static_cast<unsigned>(ppgElement.pulseAmplitude),
+                     static_cast<unsigned>(ppgElement.systoleDuration), static_cast<unsigned>(ppgElement.ppg1),
+                     static_cast<unsigned>(ppgElement.ppg2));
+                if (xQueueSend(ppgSensorQueue, &ppgElement, 0) != pdPASS) {
                     LOGW(TAG, "PPG queue full, sample dropped (sequence=%lu)",
                          static_cast<unsigned long>(ppgElement.sequence));
                 }

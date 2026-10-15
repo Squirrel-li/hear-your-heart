@@ -24,6 +24,9 @@ QueueHandle_t audioPlaybackEventQueue = nullptr;
 QueueHandle_t uiUpdateQueue = nullptr;
 QueueHandle_t bleTxQueue = nullptr;
 QueueHandle_t uiCmdQueue = nullptr;
+QueueHandle_t analysisCmdQueue = nullptr;
+volatile SensorSource activePpgSource = SensorSource::Chest;
+volatile SensorSource activeImuSource = SensorSource::Chest;
 
 UserInfo userInfo;
 volatile bool musicLibraryReady = false;

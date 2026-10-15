@@ -1,5 +1,7 @@
 #include "analysisTask.h"
 
+#include "localSensor.h"
+
 namespace {
 
 uint8_t heart_zone_observed(uint16_t hrmax, uint16_t heart_rate)
@@ -78,6 +80,11 @@ int target_bpm_update_for_zone(TargetBpmState* state, uint16_t heart_rate,
     return static_cast<int>(target);
 }
 
+const char* sourceName(SensorSource source)
+{
+    return source == SensorSource::Chest ? "chest" : source == SensorSource::Watch ? "watch" : "local";
+}
+
 } // namespace
 
 void analysisTask(void* parameter)
@@ -103,8 +110,36 @@ void analysisTask(void* parameter)
     uint8_t lastQueuedZone = 0;
     bool wasFresh = false;
     uint8_t lastZoneSeen = 0;
+    localSensorInit();  // 預設來源是胸帶，本地感測器保持關閉
 
     for (;;) {
+        AnalysisCmdElement cmd{};
+        while (analysisCmdQueue != nullptr && xQueueReceive(analysisCmdQueue, &cmd, 0) == pdPASS) {
+            const bool isPpg = cmd.command == AnalysisCmdType::SetPpgSource;
+            volatile SensorSource& current = isPpg ? activePpgSource : activeImuSource;
+            if (cmd.source == current) continue;
+            // 只有被選為來源的本地感測器才供電；初始化失敗時維持原來源。
+            const bool enable = cmd.source == SensorSource::Local;
+            if (!(isPpg ? localPpgSetEnabled(enable) : localImuSetEnabled(enable))) {
+                LOGE("ANALYSIS", "%s local sensor init failed; source stays %s", isPpg ? "PPG" : "motion",
+                     sourceName(current));
+                continue;
+            }
+            LOGI("ANALYSIS", "%s source %s -> %s", isPpg ? "PPG" : "motion", sourceName(current),
+                 sourceName(cmd.source));
+            current = cmd.source;
+            // 清掉舊來源殘留的樣本，避免被當成新來源的資料。
+            xQueueReset(isPpg ? ppgSensorQueue : accSensorQueue);
+            if (!isPpg) xQueueReset(gyroSensorQueue);
+            if (isPpg) {
+                // 新來源尚無有效心率；目標 BPM 沿用最後值，Zone 變更重新計時。
+                haveValidPpg = false;
+                zoneState.pending = 0;
+            }
+        }
+
+        localSensorPoll();  // 選了本地來源才會有資料；樣本與 BLE 走同一組 queue
+
         PpgSensorElement sample{};
         while (xQueueReceive(ppgSensorQueue, &sample, 0) == pdPASS) {
             const bool valid = sample.status == 2 && sample.heartRateBpm != 0;
@@ -182,6 +217,6 @@ void analysisTask(void* parameter)
             LOGT("ANALYSIS", "Gyro recv: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
                  gyroElement.gyro_z, static_cast<unsigned long>(gyroElement.sequence));
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

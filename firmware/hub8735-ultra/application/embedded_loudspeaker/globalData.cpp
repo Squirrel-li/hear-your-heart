@@ -31,6 +31,7 @@ bool appQueuesInit()
     uiUpdateQueue   = createQueue("uiUpdate", 16, sizeof(UiUpdateElement));
     bleTxQueue      = createQueue("bleTx", 8, sizeof(ControlCmdElement));
     uiCmdQueue      = createQueue("uiCmd", 4, sizeof(UiCommandElement));
+    analysisCmdQueue = createQueue("analysisCmd", 4, sizeof(AnalysisCmdElement));
 
     return bleRxFrameQueue &&
            ppgSensorQueue &&
@@ -41,5 +42,6 @@ bool appQueuesInit()
            audioPlaybackEventQueue &&
            uiUpdateQueue &&
            bleTxQueue &&
-           uiCmdQueue;
+           uiCmdQueue &&
+           analysisCmdQueue;
 }
