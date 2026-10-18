@@ -40,7 +40,7 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc、`0x03` Gyro）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
+| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro，與hub `BLETask.cpp` 一致）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
 | `payload`          | —     | 依 msgType 決定（第 4–6 節）                               |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
@@ -49,8 +49,9 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 | -------- | ------------------- | ------- | ---------- | ---------------------------------------- |
 | `0x00` | cmd 回應            | 3–15B   | 8–20B      | sensor → hub：FFF1（第 6 節）           |
 | `0x01` | PPG                 | 15B     | 20B        | sensor → hub：FFF1                      |
-| `0x02` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1                      |
-| `0x03` | Gyro（LSM6DS3）     | 10B     | 15B        | sensor → hub：FFF1                      |
+| `0x02` | Acc+Gyro（LSM6DS3） | 16B     | 21B        | sensor → hub：FFF1（`ble_sensor`、`ble_sensor_hr` 使用，需 MTU ≥ 24） |
+| `0x03` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
+| `0x04` | Gyro（LSM6DS3）     | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
 
 ## 4. Payload：PPG（0x01，15B）→ `PpgSensorElement`
 
@@ -69,15 +70,15 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 
 偏移 4–14 原樣對應 PPG 模組 frame 的 `ST, D0..D9`。
 
-## 5. Payload：Acc（0x02，10B）→ `AccElement`、Gyro（0x03，10B）→ `GyroElement`
+## 5. Payload：Acc（0x03，10B）→ `AccElement`、Gyro（0x04，10B）→ `GyroElement`、Acc+Gyro（0x02，16B）
 
-Acc 與 Gyro 是兩種獨立的 frame，同一次取樣會各送一筆，兩筆的 `sensor_time_ms` 與 `sequence` 相同；Acc 先送、Gyro 後送。
+Acc 與 Gyro 是兩種獨立的 frame，同一次取樣會各送一筆，兩筆的 `sensor_time_ms` 與 `sequence` 相同；Acc 先送、Gyro 後送。0x02 則把同一次取樣合併成一筆：`sequence` 後接 acc xyz（偏移 4）再接 gyro xyz（偏移 10）。
 
 | 偏移 | 欄位                                       | 型別      | 說明                    |
 | ---- | ------------------------------------------ | --------- | ----------------------- |
 | 0    | `sequence`                               | uint32    | IMU 取樣計數            |
-| 4    | `acc_x` / `acc_y` / `acc_z`（0x02）      | int16 ×3 | LSM6DS3 原始 counts     |
-| 4    | `gyro_x` / `gyro_y` / `gyro_z`（0x03）   | int16 ×3 | LSM6DS3 原始 counts     |
+| 4    | `acc_x` / `acc_y` / `acc_z`（0x03）      | int16 ×3 | LSM6DS3 原始 counts     |
+| 4    | `gyro_x` / `gyro_y` / `gyro_z`（0x04）   | int16 ×3 | LSM6DS3 原始 counts     |
 
 由 hub 換算：acc(mg) = raw × 靈敏度；gyro(mdps) = raw × 靈敏度。預設量程為 **±8 g / ±1000 dps**。
 

@@ -30,7 +30,7 @@
 /*                                                                                                         */
 /*  Flow                                                                                                   */
 /*    1. RST_N low RESET_LOW_MS, release, wait BOOT_WAIT_MS                                                */
-/*    2. Device name BM_NAME (RAM only)        77 12 00 05 00 "BLE_sensor_ITAP" -> 78 03 00 05 00         */
+/*    2. Device name BM_NAME (RAM only)        77 11 00 05 00 "BLE_watch_ITAP"  -> 78 03 00 05 00         */
 /*       Feature OR autoSendStatus (RAM only)  77 07 10 10 00 80 00 00 00  -> 78 03 00 10 00              */
 /*    3. Advertise ON                          77 04 00 07 00 01           -> 78 03 00 07 00 (<= ~1 s)     */
 /*    4. Wait for connection                                                                               */
@@ -44,7 +44,7 @@
 /*         the probe is a real PPG frame (only sent when a new PPG sample is ready)                        */
 /*    6. Notify ON: one 20-byte PPG frame per finished HR cycle (ppg_hr.h, about every 10 s, heartRateBpm  */
 /*         0 = no valid HR), the latest module frame is sent; IMU frames 1 Hz (ble-notify-data-format.md)  */
-/*         [0..3] sensor_time_ms          [4] msgType = 0x01    [5..8] PPG sequence                        */
+/*         [0..3] sensor_time_ms          [4] msgType = 0x11    [5..8] PPG sequence                        */
 /*         [9] status  [10..19] SpO2 HR bpi hrv amp systole ppg1H ppg1L ppg2H ppg2L                        */
 /*         no length prefix (the BLE notify carries the length); fits the default 20 B notify payload    */
 /*         a new sample is sent after the previous one is ACKed; samples arriving meanwhile are dropped   */
@@ -111,7 +111,7 @@ unsigned char _sdcc_external_startup(void)
 
 /*============================== configuration ==============================*/
 #define BM_BAUD             115200
-#define BM_NAME             "BLE_sensor_ITAP"   /* BLE device name, 1..31 ASCII bytes, set at every boot */
+#define BM_NAME             "BLE_watch_ITAP"    /* BLE device name, 1..31 ASCII bytes, set at every boot; the HUB tells chest/watch apart by name */
 #define USE_HIRC_166        1       /* 1 = Fsys 16.6 MHz (accurate 115200), 0 = 16 MHz */
 #define RESET_LOW_MS        100     /* RST_N low time, spec > 5 ms (UART1 test uses 100 ms) */
 #define BOOT_WAIT_MS        100     /* spec: 60 ms after RST_N 0->1                          */
@@ -539,8 +539,9 @@ static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len > 20 n
 /*   [0..3] sensor_time_ms    [4] msgType   [5..8] sequence                  */
 /*   [9] status  [10..19] SpO2 .. ppg2Low   ([11] heartRateBpm = own, ppg_hr.h)  */
 #define SENSOR_CMD          0x00            /* reserved: command frame, payload not defined yet */
-#define SENSOR_PPG          0x01
-#define SENSOR_IMU          0x02            /* acc + gyro in one frame */
+#define SENSOR_SRC          0x10            /* high nibble = source: 1 = watch (chest sends 0) */
+#define SENSOR_PPG          (SENSOR_SRC | 0x01)
+#define SENSOR_IMU          (SENSOR_SRC | 0x02) /* acc + gyro in one frame */
 #define SENSOR_ACC          0x03            /* separate acc / gyro frames: not sent by this firmware, */
 #define SENSOR_GYRO         0x04            /* defined in the protocol for other senders              */
 #define PKT_LEN             20

@@ -11,8 +11,8 @@
 /*    N76E003 P1.3 SCL, P1.4 SDA (open-drain, the OLED module provides the pull-ups)                       */
 /*    shows BLE name / link state / PPG values; one text row is refreshed per OLED_ROW_MS                  */
 /*                                                                                                         */
-/*  IMU  LSM6DS3 on the same I2C0 bus, 7-bit address 0x6A (SA0 = GND)                                      */
-/*    read once per second, sent as a 15 B Acc frame (0x02) + a 15 B Gyro frame (0x03), shown on the IMU page */
+/*  IMU  LSM6DS3 on the same I2C0 bus, 7-bit address 0x6B (SA0 = VCC)                                    */
+/*    read once per second, sent as one 21 B acc+gyro frame (msgType 0x02), shown on the IMU page */
 /*                                                                                                         */
 /*  PPG  BMH08002-4 / BMH83M002 (oximeter module) on UART0, 38400 8N1                                      */
 /*    N76E003 P0.6 TXD    ->  PPG RX                                                                       */
@@ -30,7 +30,7 @@
 /*                                                                                                         */
 /*  Flow                                                                                                   */
 /*    1. RST_N low RESET_LOW_MS, release, wait BOOT_WAIT_MS                                                */
-/*    2. Device name BM_NAME (RAM only)        77 12 00 05 00 "BLE_sensor_ITAP" -> 78 03 00 05 00         */
+/*    2. Device name BM_NAME (RAM only)        77 11 00 05 00 "BLE_watch_ITAP"  -> 78 03 00 05 00         */
 /*       Feature OR autoSendStatus (RAM only)  77 07 10 10 00 80 00 00 00  -> 78 03 00 10 00              */
 /*    3. Advertise ON                          77 04 00 07 00 01           -> 78 03 00 07 00 (<= ~1 s)     */
 /*    4. Wait for connection                                                                               */
@@ -43,7 +43,7 @@
 /*         optional app handshake: peer writes 0x01 to FFF2 -> 78 04 00 F2 FF 01                           */
 /*         the probe is a real PPG frame (only sent when a new PPG sample is ready)                        */
 /*    6. Notify ON: one 20-byte frame per PPG sample (ble-notify-data-format.md, all Big-endian)           */
-/*         [0..3] sensor_time_ms          [4] msgType = 0x01    [5..8] PPG sequence                        */
+/*         [0..3] sensor_time_ms          [4] msgType = 0x11    [5..8] PPG sequence                        */
 /*         [9] status  [10..19] SpO2 HR bpi hrv amp systole ppg1H ppg1L ppg2H ppg2L                        */
 /*         no length prefix (the BLE notify carries the length); fits the default 20 B notify payload    */
 /*         a new sample is sent after the previous one is ACKed; samples arriving meanwhile are dropped   */
@@ -67,9 +67,49 @@
 #include "numicro_8051.h"
 #include "oled_font.h"
 
+/*============================== startup: XRAM initialised variables =========*/
+/* SDCC's __mcs51_genXINIT copies the initial values (code, .XINIT) to the xdata variables (.XISEG)     */
+/* with MOVX @R0 and P2 as the upper address byte. The N76E003 has no usable P2 address port, so with   */
+/* more than 256 B of XRAM the copy misses and every variable that has an initialiser starts as random  */
+/* (seen on air: msgType, sequence upper bytes). This hook runs before the SDCC init and copies .XINIT  */
+/* again with DPTR. It returns 0 so the normal init still runs; the clear of .XSEG does not touch      */
+/* .XISEG, and the later wrong-page write only lands in page 0, which is cleared afterwards.           */
+unsigned char _sdcc_external_startup(void)
+{
+    __asm
+        mov     r1,#l_XINIT
+        mov     a,r1
+        orl     a,#(l_XINIT >> 8)
+        jz      9002$
+        mov     r2,#((l_XINIT >> 8) + 1)
+        mov     r3,#s_XINIT
+        mov     r4,#(s_XINIT >> 8)
+        mov     r5,#s_XISEG
+        mov     r6,#(s_XISEG >> 8)
+    9001$:
+        mov     dpl,r3
+        mov     dph,r4
+        clr     a
+        movc    a,@a+dptr
+        inc     dptr
+        mov     r3,dpl
+        mov     r4,dph
+        mov     dpl,r5
+        mov     dph,r6
+        movx    @dptr,a
+        inc     dptr
+        mov     r5,dpl
+        mov     r6,dph
+        djnz    r1,9001$
+        djnz    r2,9001$
+    9002$:
+    __endasm;
+    return 0;
+}
+
 /*============================== configuration ==============================*/
 #define BM_BAUD             115200
-#define BM_NAME             "BLE_sensor_ITAP"   /* BLE device name, 1..31 ASCII bytes, set at every boot */
+#define BM_NAME             "BLE_watch_ITAP"    /* BLE device name, 1..31 ASCII bytes, set at every boot; the HUB tells chest/watch apart by name */
 #define USE_HIRC_166        1       /* 1 = Fsys 16.6 MHz (accurate 115200), 0 = 16 MHz */
 #define RESET_LOW_MS        100     /* RST_N low time, spec > 5 ms (UART1 test uses 100 ms) */
 #define BOOT_WAIT_MS        100     /* spec: 60 ms after RST_N 0->1                          */
@@ -88,10 +128,12 @@
 #else
 #define PPG_TH1             (256 - 26)
 #endif
-#define PPG_SEND_START      1       /* 1 = send "start measure" (55 B1 01 00 00 00 B2 AA) at boot */
-                                    /* The module must be in timed / continuous upload mode       */
-                                    /* (EEPROM 0x01 mode 0x00/01/04/05/06/07). In ask-response     */
-                                    /* mode (0x02/03) it does not send 55 B0 frames by itself.     */
+#define PPG_SEND_START      1       /* 1 = at boot read the module's mode (EEPROM 0x01), write the factory     */
+                                    /* default 0x00 (timed upload) if it differs, then send "start measure",  */
+                                    /* see ppg_start().                                                         */
+                                    /* 0 = leave the module as it is: it must then already be in timed /       */
+                                    /* continuous upload mode; in ask-response mode (0x02/03) it sends no 55 B0 */
+                                    /* frames by itself.                                                        */
 
 #define USE_OLED            1       /* 0 = skip the OLED (to rule it out when debugging)      */
 #define OLED_ADDR           0x78    /* 8-bit I2C address                                     */
@@ -495,7 +537,12 @@ static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len > 20 n
 /* BLE frame (ble-notify-data-format.md), Big-endian, one record per frame:  */
 /*   [0..3] sensor_time_ms    [4] msgType   [5..8] sequence                  */
 /*   [9] status  [10..19] SpO2 .. ppg2Low                                    */
-#define SENSOR_PPG          0x01
+#define SENSOR_CMD          0x00            /* reserved: command frame, payload not defined yet */
+#define SENSOR_SRC          0x10            /* high nibble = source: 1 = watch (chest sends 0) */
+#define SENSOR_PPG          (SENSOR_SRC | 0x01)
+#define SENSOR_IMU          (SENSOR_SRC | 0x02) /* acc + gyro in one frame */
+#define SENSOR_ACC          0x03            /* separate acc / gyro frames: not sent by this firmware, */
+#define SENSOR_GYRO         0x04            /* defined in the protocol for other senders              */
 #define PKT_LEN             20
 #define PKT_TS              0
 #define PKT_SEQ             5
@@ -588,19 +635,74 @@ static void UART0_Init(void)
 }
 
 #if PPG_SEND_START
+/* Factory default module state (datasheet: EEPROM 0x01 = 0x0000, timed upload, red LED off) + "start". */
+/* ble_sensor_hr writes mode 4 (continuous upload) into the same EEPROM, so a module moved between the  */
+/* boards keeps it: the mode is read first and written back only when it differs. The timed upload     */
+/* interval (EEPROM 0x0A) is left as it is. A write takes 50 ms and no command may follow during that   */
+/* time; other commands need 6 ms.                                                                      */
+#define PPG_MODE_VALUE      0x00
+#define PPG_REPLY_MS        100
+__code UINT8 ppg_read_cmd[8]  = { 0x55, 0xB1, 0x05, 0x01, 0x00, 0x00, 0xB7, 0xAA };   /* read EEPROM 0x01 */
+__code UINT8 ppg_mode_cmd[8]  = { 0x55, 0xB1, 0x04, 0x01, 0x00, 0x00, 0xB6, 0xAA };   /* EEPROM 0x01 = 0x0000 */
+__code UINT8 ppg_stop_cmd[8]  = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x01, 0xB3, 0xAA };
 __code UINT8 ppg_start_cmd[8] = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x00, 0xB2, 0xAA };
+__code UINT8 ppg_read_hdr[4]  = { 0x55, 0xB1, 0x05, 0x01 };
+UINT8 ppg_mode_ch = '?';                    /* shown on the OLED: '=' mode was already right, 'W' it was written */
 
-static void ppg_start(void)                 /* reply 55 B1 .. is ignored by the parser */
+static void ppg_cmd(__code UINT8 *cmd, UINT16 wait_ms)      /* UART0 interrupt must be off */
 {
     UINT8 i;
-    clr_ES;
+    UINT16 t0;
     for (i = 0; i < 8; i++)
     {
         TI = 0;
-        SBUF = ppg_start_cmd[i];
+        SBUF = cmd[i];
         while (TI == 0);
     }
     TI = 0;
+    t0 = now_ms();
+    while ((UINT16)(now_ms() - t0) < wait_ms);
+}
+
+/* 1 = the module reports mode PPG_MODE_VALUE. No answer within PPG_REPLY_MS counts as "not right".   */
+/* The reply is 55 B1 05 01 hi lo CS AA; a streaming module sends 55 B0 frames in between, so look for  */
+/* the header byte by byte.                                                                          */
+static __bit ppg_mode_ok(void)
+{
+    UINT8 st = 0, c, hi = 0, lo = 0;
+    UINT16 t0;
+
+    RI = 0;
+    ppg_cmd(ppg_read_cmd, 0);
+    t0 = now_ms();
+    while ((UINT16)(now_ms() - t0) < PPG_REPLY_MS)
+    {
+        if (!RI) continue;
+        c = SBUF;
+        RI = 0;
+        if (st < 4)       st = (c == ppg_read_hdr[st]) ? st + 1 : (c == 0x55 ? 1 : 0);
+        else if (st == 4) { hi = c; st = 5; }
+        else if (st == 5) { lo = c; st = 6; }
+        else if (st == 6) st = (c == (UINT8)(0xB1 + 0x05 + 0x01 + hi + lo)) ? 7 : 0;
+        else if (c == 0xAA) return hi == 0 && lo == PPG_MODE_VALUE;
+        else st = 0;
+    }
+    return 0;
+}
+
+static void ppg_start(void)
+{
+    clr_ES;
+    if (ppg_mode_ok())
+        ppg_mode_ch = '=';
+    else
+    {
+        ppg_cmd(ppg_mode_cmd, 60);
+        ppg_cmd(ppg_stop_cmd, 10);
+        ppg_mode_ch = 'W';
+    }
+    ppg_cmd(ppg_start_cmd, 10);
+    RI = 0;                                 /* drop the replies, the parser starts clean */
     set_ES;
 }
 #endif
@@ -835,33 +937,33 @@ static UINT32 uptime_ms(void)
 }
 
 /*============================== LSM6DS3 (I2C0, shared with the OLED) ======*/
-/* Read once per IMU_PERIOD_MS, sent as an Acc frame and a Gyro frame (ble-notify-data-format.md */
-/* section 5) and shown on the IMU page. Accel +-8 g, gyro +-1000 dps, both ODR 26 Hz.          */
-#define IMU_ADDR            0xD4            /* 8-bit address, SA0 = GND (7-bit 0x6A) */
+/* Read once per IMU_PERIOD_MS, sent as one acc+gyro frame (msgType 0x12, ble-notify-data-format.md */
+/* section 5) and shown on the IMU page. Accel +-8 g, gyro +-1000 dps, both ODR 12.5 Hz.          */
+#define IMU_ADDR            0xD6            /* 8-bit address, SA0 = VCC (7-bit 0x6B) */
 #define IMU_PERIOD_MS       1000            /* 1 Hz */
-#define SENSOR_ACC          0x02
-#define SENSOR_GYRO         0x03
-#define IMU_PKT_LEN         15
+#define IMU_PKT_LEN         21              /* needs MTU >= 24 (default 23 carries only 20 B) */
 #define IMU_PKT_SEQ         5
-#define IMU_PKT_DATA        9               /* x y z: int16 Big-endian */
-#define IMU_PEND_ACC        0x01
-#define IMU_PEND_GYRO       0x02
+#define IMU_PKT_ACC         9               /* acc x y z: int16 Big-endian */
+#define IMU_PKT_GYRO        15              /* gyro x y z: int16 Big-endian */
 
 #define LSM_WHO_AM_I        0x0F            /* 0x69 LSM6DS3, 0x6A LSM6DS3-C / TR-C */
 #define LSM_CTRL1_XL        0x10
 #define LSM_CTRL2_G         0x11
 #define LSM_CTRL3_C         0x12
+#define LSM_CTRL4_C         0x13
+#define LSM_CTRL7_G         0x16
+#define LSM_CTRL8_XL        0x17
+#define LSM_TAP_CFG         0x58
 #define LSM_OUTX_L_G        0x22            /* gyro XYZ then accel XYZ, little-endian */
 
-__xdata UINT8 acc_pkt[IMU_PKT_LEN]  = { 0, 0, 0, 0, SENSOR_ACC };
-__xdata UINT8 gyro_pkt[IMU_PKT_LEN] = { 0, 0, 0, 0, SENSOR_GYRO };
+__xdata UINT8 imu_pkt[IMU_PKT_LEN] = { 0, 0, 0, 0, SENSOR_IMU };
 __xdata UINT8 imu_raw[12];
 UINT32 imu_seq   = 0;
 UINT16 t_imu     = 0;
 __bit  imu_ok;                              /* sensor answered WHO_AM_I and is configured */
 __bit  imu_skip;                            /* init failed: IMU is not used any more      */
-__bit  imu_has;                             /* acc_pkt / gyro_pkt hold a sample           */
-UINT8  imu_ready;                           /* IMU_PEND_* bits: frames not sent yet       */
+__bit  imu_has;                             /* imu_pkt holds a sample                     */
+UINT8  imu_ready;                           /* 1 = imu_pkt not sent yet                   */
 
 static __bit imu_write(UINT8 reg, UINT8 val)
 {
@@ -898,8 +1000,12 @@ static void imu_init(void)
     i2c_bus_init();
     if (!imu_read(LSM_WHO_AM_I, &id, 1) || (id != 0x69 && id != 0x6A)) return;
     if (imu_write(LSM_CTRL3_C,  0x44) &&    /* BDU, auto-increment */
-        imu_write(LSM_CTRL1_XL, 0x2C) &&    /* 26 Hz, +-8 g        */
-        imu_write(LSM_CTRL2_G,  0x28))      /* 26 Hz, +-1000 dps   */
+        imu_write(LSM_CTRL4_C,  0x80) &&    /* XL_BW_SCAL_ODR: anti-alias BW from BW_XL (high-perf mode only) */
+        imu_write(LSM_TAP_CFG,  0x10) &&    /* SLOPE_FDS: enable the accel HP / LPF2 filters, without it the HP path outputs 0 */
+        imu_write(LSM_CTRL8_XL, 0x24) &&    /* HP_SLOPE_XL_EN + HPCF_XL=01: high-pass ODR/100 = 0.125 Hz (gravity removed) */
+        imu_write(LSM_CTRL7_G,  0x50) &&    /* HP_G_EN + HPCF_G=01: gyro high-pass 0.0324 Hz (zero-rate offset removed) */
+        imu_write(LSM_CTRL1_XL, 0x1F) &&    /* 12.5 Hz, +-8 g, anti-alias BW 50 Hz */
+        imu_write(LSM_CTRL2_G,  0x18))      /* 12.5 Hz, +-1000 dps */
         imu_ok = 1;
 }
 
@@ -925,41 +1031,33 @@ static void imu_task(void)
     }
 
     up = uptime_ms();
-    acc_pkt[0] = gyro_pkt[0] = (UINT8)(up >> 24);
-    acc_pkt[1] = gyro_pkt[1] = (UINT8)(up >> 16);
-    acc_pkt[2] = gyro_pkt[2] = (UINT8)(up >> 8);
-    acc_pkt[3] = gyro_pkt[3] = (UINT8)up;
-    acc_pkt[IMU_PKT_SEQ + 0] = gyro_pkt[IMU_PKT_SEQ + 0] = (UINT8)(imu_seq >> 24);
-    acc_pkt[IMU_PKT_SEQ + 1] = gyro_pkt[IMU_PKT_SEQ + 1] = (UINT8)(imu_seq >> 16);
-    acc_pkt[IMU_PKT_SEQ + 2] = gyro_pkt[IMU_PKT_SEQ + 2] = (UINT8)(imu_seq >> 8);
-    acc_pkt[IMU_PKT_SEQ + 3] = gyro_pkt[IMU_PKT_SEQ + 3] = (UINT8)imu_seq;
+    imu_pkt[0] = (UINT8)(up >> 24);
+    imu_pkt[1] = (UINT8)(up >> 16);
+    imu_pkt[2] = (UINT8)(up >> 8);
+    imu_pkt[3] = (UINT8)up;
+    imu_pkt[IMU_PKT_SEQ + 0] = (UINT8)(imu_seq >> 24);
+    imu_pkt[IMU_PKT_SEQ + 1] = (UINT8)(imu_seq >> 16);
+    imu_pkt[IMU_PKT_SEQ + 2] = (UINT8)(imu_seq >> 8);
+    imu_pkt[IMU_PKT_SEQ + 3] = (UINT8)imu_seq;
     imu_seq++;
     for (i = 0; i < 6; i++)
     {
-        acc_pkt[IMU_PKT_DATA + i]  = imu_raw[6 + (i ^ 1)];  /* accel, raw[6..11] LE -> BE */
-        gyro_pkt[IMU_PKT_DATA + i] = imu_raw[i ^ 1];        /* gyro,  raw[0..5]  LE -> BE */
+        imu_pkt[IMU_PKT_ACC + i]  = imu_raw[6 + (i ^ 1)];   /* accel, raw[6..11] LE -> BE */
+        imu_pkt[IMU_PKT_GYRO + i] = imu_raw[i ^ 1];         /* gyro,  raw[0..5]  LE -> BE */
     }
     imu_has   = 1;
-    imu_ready = IMU_PEND_ACC | IMU_PEND_GYRO;
+    imu_ready = 1;
 }
 
-static void imu_send(void)                  /* one frame per call: Acc first, then Gyro on the next round */
+static void imu_send(void)
 {
-    if (imu_ready & IMU_PEND_ACC)
-    {
-        bm_notify_send(acc_pkt, IMU_PKT_LEN);
-        imu_ready &= ~IMU_PEND_ACC;
-    }
-    else
-    {
-        bm_notify_send(gyro_pkt, IMU_PKT_LEN);
-        imu_ready &= ~IMU_PEND_GYRO;
-    }
+    bm_notify_send(imu_pkt, IMU_PKT_LEN);
+    imu_ready = 0;
 }
 
 static int imu_val(UINT8 i)                 /* i: 0..2 accel XYZ, 3..5 gyro XYZ */
 {
-    __xdata UINT8 *p = (i < 3 ? acc_pkt : gyro_pkt) + IMU_PKT_DATA + 2 * (i % 3);
+    __xdata UINT8 *p = imu_pkt + (i < 3 ? IMU_PKT_ACC : IMU_PKT_GYRO) + 2 * (i % 3);
     return ((int)p[0] << 8) | p[1];
 }
 
@@ -1012,6 +1110,9 @@ static void oled_build(UINT8 row, UINT8 state)
         break;
     case 2:
         ln_s("UP  ");   ln_time(uptime_ms());
+#if PPG_SEND_START
+        ln_s(" M:");    ln_c(ppg_mode_ch);      /* module mode at boot: '=' already default, 'W' written */
+#endif
         break;
     case 3:
         ln_s("PPG:");
@@ -1333,7 +1434,7 @@ void main(void)
             }
 #endif
             cmd_state = CMD_IDLE;
-            if (imu_ready) imu_send();              /* 1 Hz, the PPG samples of these 2 rounds are dropped */
+            if (imu_ready) imu_send();              /* 1 Hz, the PPG sample of this round is dropped */
             else if (ppg_ready) ppg_send();         /* one frame per PPG sample */
             break;
 
