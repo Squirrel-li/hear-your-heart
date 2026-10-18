@@ -16,12 +16,14 @@ extern QueueHandle_t ppgSensorQueue;	// PPG sensor data queue
 extern QueueHandle_t accSensorQueue;	// Accelerometer data queue
 extern QueueHandle_t gyroSensorQueue;	// Gyroscope data queue
 extern QueueHandle_t targetBpmResultQueue;	// Latest analysis result for controlTask
+extern QueueHandle_t motionLevelQueue;	// Latest confirmed motion level (uint8_t, see motion_level.h) for controlTask
 extern QueueHandle_t audioCmdQueue;		// Audio command queue
 extern QueueHandle_t audioPlaybackEventQueue;	// Playback events for controlTask
 extern QueueHandle_t uiUpdateQueue;		// UI update queue
 extern QueueHandle_t uiCmdQueue;		// Menu commands from UITask to controlTask
 extern QueueHandle_t analysisCmdQueue;	// Commands from controlTask to analysisTask
 extern QueueHandle_t bleTxQueue;		// BLE transmission queue
+extern QueueHandle_t bleCmdQueue;		// Connection commands from UITask to BLETask
 
 bool appQueuesInit();
 
@@ -30,6 +32,9 @@ bool appQueuesInit();
 extern volatile bool musicLibraryReady;
 extern volatile bool musicStorageReady;
 extern volatile bool musicBpmAnalysisBusy;
+// Software standby ("Power off"): written only by controlTask; BLETask and analysisTask
+// read it to drop the link / power down local sensors.
+extern volatile bool systemStandby;
 
 struct UserInfo {
     int age;
@@ -46,8 +51,8 @@ struct UserInfo {
 extern UserInfo userInfo;
 
 // 感測資料來源。BLE frame 的 msgType byte：高 4 bit = source，低 4 bit = msgType。
-//   Chest (0): 胸帶（BM7701 / N76E003 現有格式，不另外處理）
-//   Watch (1): 手錶端（協定保留，尚無對應裝置）
+//   Chest (0): 胸帶，廣播名稱 BLE_sensor_ITAP
+//   Watch (1): 手錶（ble_sensor_hr），廣播名稱 BLE_watch_ITAP；兩台可同時連線
 //   Local (2): 直接接在 Hub 上的 BMH08002-4 + LSM6DS3；不經 BLE，不會出現在 frame 裡
 enum class SensorSource : uint8_t {
     Chest = 0,
@@ -139,7 +144,7 @@ enum class AudioPlaybackEventType : uint8_t {
 
 struct AudioPlaybackEvent {
     AudioPlaybackEventType type;
-    int8_t songIndex;
+    int16_t songIndex;
 };
 
 enum class AudioCommandType : uint8_t {
@@ -157,7 +162,7 @@ struct AudioCmdElement {
     AudioCommandType command;
     uint8_t volumePercent;
     uint8_t isAutomatic;
-    int8_t songIndex;
+    int16_t songIndex;
     char filename[AUDIO_FILENAME_MAX];
 };
 
@@ -171,15 +176,19 @@ enum class UiUpdateType : uint8_t {
     Acc,
     Gyro,
     Mode,
-    BpmAnalysis
+    BpmAnalysis,
+    Train,
+    Motion  // Demo motion level in activityLevel (MOTION_LEVEL_NONE = no data)
 };
 
-// Enjoy and Train are both automatic (heart-rate driven) selection for now.
-// ponytail: Train currently behaves exactly like Enjoy; give it its own rules when defined.
+// Enjoy: automatic, heart-rate driven selection.
+// Train: automatic, follows a built-in plan (train_plan.h) by time; heart rate is only shown.
+// Demo is automatic too, but driven by the motion level and plays /demo/DEMO_nn.mp3 instead of the library.
 enum class PlayMode : uint8_t {
     Enjoy,
     Train,
-    Manual
+    Manual,
+    Demo
 };
 
 enum class AudioState : uint8_t {
@@ -188,8 +197,10 @@ enum class AudioState : uint8_t {
     Paused
 };
 
-// Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleConnected; Acc: acc; Gyro: gyro;
-// Audio: audioState and, when a new file starts, filename; Mode: mode
+// Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleLink/bleAuto; Acc: acc; Gyro: gyro;
+// Audio: audioState and, when a new file starts, filename; Mode: mode;
+// Train: trainPlan, trainStage (TRAIN_STAGE_DONE when finished), trainRemainingS;
+// Analysis: targetBpm, zone (heart-rate target used by Enjoy); Motion: activityLevel
 enum class BpmAnalysisMode : uint8_t {
     NewOrUnknown,
     All
@@ -213,18 +224,44 @@ struct UiUpdateElement {
     uint8_t isPlaying;
     uint8_t spo2;
     uint8_t sensorStatus;
-    uint8_t bleConnected;
+    uint8_t bleLink[2];  // BleLinkState, index = SensorSource (Chest, Watch)
+    uint8_t bleAuto[2];  // 1 = Auto, 0 = Manual
     uint8_t mode;        // PlayMode
     uint8_t audioState;  // AudioState
     BpmAnalysisState bpmAnalysisState;
     BpmAnalysisMode bpmAnalysisMode;
-    uint8_t bpmAnalysisCurrent;
-    uint8_t bpmAnalysisTotal;
-    uint8_t bpmAnalysisSucceeded;
-    uint8_t bpmAnalysisFailed;
+    uint16_t bpmAnalysisCurrent;
+    uint16_t bpmAnalysisTotal;
+    uint16_t bpmAnalysisSucceeded;
+    uint16_t bpmAnalysisFailed;
     int16_t acc[3];
     int16_t gyro[3];
+    uint16_t targetBpm;
+    uint8_t zone;
+    uint8_t trainPlan;
+    uint8_t trainStage;
+    uint16_t trainRemainingS;
     char filename[AUDIO_FILENAME_MAX];
+};
+
+// BLE link per device. Auto retries until connected and switches to Manual when the link drops;
+// Manual scans only after a Connect command.
+enum class BleLinkState : uint8_t {
+    Down,
+    Connecting,
+    Up
+};
+
+enum class BleCommandType : uint8_t {
+    Connect,     // scan + connect, up to 3 tries
+    Disconnect,  // also switches to Manual
+    SetAuto,
+    SetManual
+};
+
+struct BleCmdElement {
+    BleCommandType command;
+    SensorSource device;  // Chest or Watch
 };
 
 // Menu command from UITask; controlTask applies the manual-control rules.
@@ -239,14 +276,18 @@ enum class UiCommandType : uint8_t {
     CancelBpmAnalysis,
     PlaySong,
     SetPpgSource,
-    SetImuSource
+    SetImuSource,
+    PowerOff,  // enter software standby
+    PowerOn,   // leave standby; playback stays stopped
+    RestartTrain  // restart the current Train plan from stage 1
 };
 
 struct UiCommandElement {
     UiCommandType command;
     uint8_t volumePercent;
     PlayMode mode;
-    int8_t songIndex;  // PlaySong: musicLibrary index
+    uint8_t trainPlan;  // SetMode Train: index into TRAIN_PLANS
+    int16_t songIndex;  // PlaySong: musicLibrary index
     SensorSource source;  // SetPpgSource / SetImuSource
 };
 

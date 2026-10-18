@@ -22,8 +22,7 @@
 #define LOG_LEVEL LOG_LEVEL_DEBUG
 #endif
 
-// Output port. Defined: USB Type-C Serial. Undefined: Serial2, whose TX is D8 (a UI button).
-#define DEBUG_MODE
+// Output port: Serial (LOG UART, TX = D17, RX = D16).
 
 // Call before any task starts (creates the mutex). Serial must already be begun.
 void logInit();

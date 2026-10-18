@@ -8,20 +8,22 @@
 // 曲目清單來自 SD 卡根目錄的 music_library.json（範例見 testdata/sd_music），
 // 由 audioTask 開機載入到 musicLibrary；檔名與 BPM 以該檔為準。
 // 60-180 BPM 以 5% 容差比對，沒有符合者改選最接近目標 BPM 的曲目。
-// ponytail: 失敗遮罩為 32 位元，與 MUSIC_LIBRARY_MAX 相同；曲目上限提高時需一併加寬。
+// 無法播放的曲目以位元陣列記錄（每首 1 bit），nullptr 表示沒有排除任何曲目。
+constexpr size_t SONG_MASK_WORDS = (MUSIC_LIBRARY_MAX + 31) / 32;
 
 static uint32_t bpmDistance(uint16_t a, uint16_t b)
 {
     return a > b ? a - b : b - a;
 }
 
-static bool songUnavailable(int index, uint32_t unavailableMask)
+static bool songUnavailable(int index, const uint32_t* unavailableMask)
 {
-    return index >= 0 && index < 32 && (unavailableMask & (1u << index)) != 0;
+    return unavailableMask != nullptr && index >= 0 && index < static_cast<int>(MUSIC_LIBRARY_MAX) &&
+           (unavailableMask[index / 32] & (1u << (index % 32))) != 0;
 }
 
 static int nextMatchingSong(uint16_t targetBpm, int currentSong,
-                            uint32_t unavailableMask = 0)
+                            const uint32_t* unavailableMask = nullptr)
 {
     if (targetBpm == 0 || musicLibrary.count == 0) return -1;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
@@ -34,10 +36,10 @@ static int nextMatchingSong(uint16_t targetBpm, int currentSong,
 }
 
 static int closestSong(uint16_t targetBpm, int currentSong,
-                        uint32_t unavailableMask = 0)
+                        const uint32_t* unavailableMask = nullptr)
 {
     if (targetBpm == 0 || musicLibrary.count == 0) return -1;
-    // ponytail: Linear scan is sufficient for at most 32 songs.
+    // ponytail: Linear scan; fine for MUSIC_LIBRARY_MAX songs once per selection.
     int best = -1;
     uint32_t bestDistance = UINT32_MAX;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
@@ -53,14 +55,14 @@ static int closestSong(uint16_t targetBpm, int currentSong,
 }
 
 static int songForStart(uint16_t targetBpm, int currentSong,
-                         uint32_t unavailableMask = 0)
+                         const uint32_t* unavailableMask = nullptr)
 {
     const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask);
     return matching >= 0 ? matching : closestSong(targetBpm, currentSong, unavailableMask);
 }
 
 static int songAfterFinish(uint16_t targetBpm, int currentSong,
-                            uint32_t unavailableMask = 0)
+                            const uint32_t* unavailableMask = nullptr)
 {
     const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask);
     return matching >= 0
@@ -107,6 +109,33 @@ int main(void)
     const char* unknown = "{\"songs\":[{\"file\":\"unknown.mp3\"}]}";
     assert(music_json::parse(unknown, musicLibrary));
     assert(songForStart(100, -1) == -1);  // Unknown BPM is not selectable.
+
+    // Library beyond the old 32-song limit; the failure mask must reach high indexes.
+    static char big[MUSIC_LIBRARY_JSON_MAX];
+    size_t n = (size_t)snprintf(big, sizeof(big), "{\"songs\":[");
+    for (unsigned i = 0; i < MUSIC_LIBRARY_MAX; ++i)
+        n += (size_t)snprintf(big + n, sizeof(big) - n, "%s{\"file\":\"s%04u.mp3\",\"bpm\":%u}",
+                              i ? "," : "", i, i == 1000 || i == 1001 ? 200u : 60u);
+    snprintf(big + n, sizeof(big) - n, "]}");
+    assert(music_json::parse(big, musicLibrary) && musicLibrary.count == MUSIC_LIBRARY_MAX);
+    assert(songForStart(200, -1) == 1000);
+    static uint32_t failed[SONG_MASK_WORDS];
+    failed[1000 / 32] |= 1u << (1000 % 32);
+    assert(songForStart(200, -1, failed) == 1001);
+    static MusicLibrary over;
+    n = (size_t)snprintf(big, sizeof(big), "{\"songs\":[");
+    for (unsigned i = 0; i <= MUSIC_LIBRARY_MAX; ++i)
+        n += (size_t)snprintf(big + n, sizeof(big) - n, "%s{\"file\":\"s%04u.mp3\"}", i ? "," : "", i);
+    snprintf(big + n, sizeof(big) - n, "]}");
+    assert(!music_json::parse(big, over));  // one past the limit is rejected, not truncated
+    for (unsigned i = 0; i < MUSIC_LIBRARY_MAX; ++i) {  // worst case: longest fields everywhere
+        MusicEntry& e = musicLibrary.entries[i];
+        snprintf(e.file, sizeof(e.file), "%027u.mp3", i);
+        snprintf(e.genre, sizeof(e.genre), "%015u", i);
+        e.bpm = 300;
+        e.fileSize = e.fileModified = 0xFFFFFFFFu;
+    }
+    assert(music_json::format(musicLibrary, big, sizeof(big)) > 0);  // a full library fits the buffer
     return 0;
 }
 #endif

@@ -2,7 +2,9 @@
 
 #include <cstring>
 
+#include "motion_level.h"
 #include "song_catalog.h"
+#include "train_plan.h"
 
 namespace {
 
@@ -13,10 +15,21 @@ uint16_t targetBpm = 0;
 uint8_t activeZone = 0;
 int currentSong = -1;
 bool automaticSongActive = false;
-uint32_t failedSongMask = 0;
+uint32_t failedSongMask[SONG_MASK_WORDS] = {};
 bool initialSelectionAttempted = false;
 bool pendingAutoPlay = false;
 bool pendingAfterFinish = false;
+uint8_t motionLevel = MOTION_LEVEL_NONE;
+bool demoPending = false;
+// DEMO playback uses songIndex DEMO_SONG_BASE - level so its events never match a library index.
+constexpr int16_t DEMO_SONG_BASE = -10;
+// Train progress: frozen while not in Train (manual, standby), resumed when the same plan is chosen again.
+uint8_t trainPlan = 0;
+uint32_t trainElapsedMs = 0;
+uint32_t trainLastTickMs = 0;
+bool trainRunning = false;  // false = not started or finished; the next Train starts over
+uint8_t trainStage = TRAIN_STAGE_DONE;
+uint16_t trainRemainingS = 0;
 
 constexpr const char* TAG = "CONTROL";
 
@@ -49,6 +62,9 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::PlaySong: return "PlaySong";
     case UiCommandType::SetPpgSource: return "SetPpgSource";
     case UiCommandType::SetImuSource: return "SetImuSource";
+    case UiCommandType::PowerOff: return "PowerOff";
+    case UiCommandType::PowerOn: return "PowerOn";
+    case UiCommandType::RestartTrain: return "RestartTrain";
     }
     return "?";
 }
@@ -68,6 +84,7 @@ const char* modeLabel(PlayMode mode)
     switch (mode) {
     case PlayMode::Enjoy: return "Enjoy";
     case PlayMode::Train: return "Train";
+    case PlayMode::Demo: return "Demo";
     default: return "Manual";
     }
 }
@@ -110,11 +127,66 @@ bool sendAudioCommand(const AudioCmdElement& command)
     return true;
 }
 
+// DEMO: each motion level plays SD /demo/DEMO_nn.mp3 (outside the library); a failed file stays
+// silent until the level changes, a finished one repeats.
+void playDemoForLevel()
+{
+    if (!automaticMode || playMode != PlayMode::Demo) return;
+    if (motionLevel == MOTION_LEVEL_NONE) {
+        LOGI(TAG, "DEMO: waiting for motion data");
+        return;
+    }
+    if (musicBpmAnalysisBusy) {
+        if (!demoPending) LOGI(TAG, "BPM analysis running; DEMO playback deferred");
+        demoPending = true;
+        return;
+    }
+    AudioCmdElement command{};
+    command.command = AudioCommandType::Play;
+    command.isAutomatic = 1;
+    command.songIndex = static_cast<int16_t>(DEMO_SONG_BASE - motionLevel);
+    snprintf(command.filename, sizeof(command.filename), "demo/DEMO_%02u.mp3", static_cast<unsigned>(motionLevel));
+    demoPending = !sendAudioCommand(command);
+    if (!demoPending) LOGI(TAG, "DEMO: level %u -> %s", static_cast<unsigned>(motionLevel), command.filename);
+}
+
+void updateMotionLevel(uint8_t level)
+{
+    if (level >= MOTION_LEVELS) {
+        LOGW(TAG, "ignored invalid motion level %u", static_cast<unsigned>(level));
+        return;
+    }
+    if (level == motionLevel) return;
+    LOGI(TAG, "motion level %d -> %u", motionLevel == MOTION_LEVEL_NONE ? -1 : static_cast<int>(motionLevel),
+         static_cast<unsigned>(level));
+    motionLevel = level;
+    if (uiUpdateQueue != nullptr) {
+        UiUpdateElement update{};
+        update.type = UiUpdateType::Motion;
+        update.timestampMs = millis();
+        update.activityLevel = level;
+        xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+    }
+    playDemoForLevel();
+}
+
+// Train songs follow the plan stage (HRmax from age); Enjoy follows the heart-rate target.
+uint16_t selectionBpm()
+{
+    if (playMode != PlayMode::Train) return haveTargetBpm ? targetBpm : 0;
+    if (!trainRunning || trainStage == TRAIN_STAGE_DONE) return 0;
+    const float hrmax = userInfo.HRmax();
+    return train_stage_bpm(hrmax > 0.0f ? static_cast<uint16_t>(hrmax + 0.5f) : 0,
+                           TRAIN_PLANS[trainPlan].stages[trainStage].zone);
+}
+
 void selectSongForTarget(bool afterFinish)
 {
-    if (!automaticMode || !haveTargetBpm || targetBpm == 0) {
-        LOGD(TAG, "select skipped: automatic=%d haveTarget=%d target=%u", automaticMode ? 1 : 0,
-             haveTargetBpm ? 1 : 0, static_cast<unsigned>(targetBpm));
+    if (playMode == PlayMode::Demo) return;
+    const uint16_t wantBpm = selectionBpm();
+    if (!automaticMode || wantBpm == 0) {
+        LOGD(TAG, "select skipped: automatic=%d mode=%s target=%u", automaticMode ? 1 : 0, modeLabel(playMode),
+             static_cast<unsigned>(wantBpm));
         return;
     }
     if (musicBpmAnalysisBusy) {
@@ -125,24 +197,24 @@ void selectSongForTarget(bool afterFinish)
     }
 
     const int selected = afterFinish
-        ? songAfterFinish(targetBpm, currentSong, failedSongMask)
-        : songForStart(targetBpm, currentSong, failedSongMask);
+        ? songAfterFinish(wantBpm, currentSong, failedSongMask)
+        : songForStart(wantBpm, currentSong, failedSongMask);
     {
         unsigned withBpm = 0, excluded = 0, matching = 0;
         for (size_t i = 0; i < musicLibrary.count; ++i) {
             if (musicLibrary.entries[i].bpm == 0) continue;
             ++withBpm;
             if (songUnavailable(static_cast<int>(i), failedSongMask)) { ++excluded; continue; }
-            if (bpmDistance(musicLibrary.entries[i].bpm, targetBpm) * 100u <= static_cast<uint32_t>(targetBpm) * 5u) ++matching;
+            if (bpmDistance(musicLibrary.entries[i].bpm, wantBpm) * 100u <= static_cast<uint32_t>(wantBpm) * 5u) ++matching;
         }
         LOGD(TAG, "select (%s): target=%u current=%d songs=%u withBpm=%u failed-excluded=%u within5%%=%u -> %d",
-             afterFinish ? "after finish" : "start/zone change", static_cast<unsigned>(targetBpm), currentSong,
+             afterFinish ? "after finish" : "start/zone change", static_cast<unsigned>(wantBpm), currentSong,
              static_cast<unsigned>(musicLibrary.count), withBpm, excluded, matching, selected);
     }
     if (selected < 0) {
         pendingAutoPlay = false;
-        LOGW(TAG, "no playable song (library=%u, failed mask=0x%08lX); nothing to play",
-             static_cast<unsigned>(musicLibrary.count), static_cast<unsigned long>(failedSongMask));
+        LOGW(TAG, "no playable song (library=%u); nothing to play",
+             static_cast<unsigned>(musicLibrary.count));
         return;
     }
     if (!afterFinish && automaticSongActive && selected == currentSong) {
@@ -154,7 +226,7 @@ void selectSongForTarget(bool afterFinish)
     AudioCmdElement command{};
     command.command = AudioCommandType::Play;
     command.isAutomatic = 1;
-    command.songIndex = static_cast<int8_t>(selected);
+    command.songIndex = static_cast<int16_t>(selected);
     strncpy(command.filename, musicLibrary.entries[selected].file,
             sizeof(command.filename) - 1);
 
@@ -164,7 +236,7 @@ void selectSongForTarget(bool afterFinish)
         pendingAutoPlay = false;
         LOGI(TAG, "auto selected #%d %s (%u BPM) for target %u BPM", selected,
              musicLibrary.entries[selected].file, static_cast<unsigned>(musicLibrary.entries[selected].bpm),
-             static_cast<unsigned>(targetBpm));
+             static_cast<unsigned>(wantBpm));
     } else {
         pendingAutoPlay = true;
         pendingAfterFinish = afterFinish;
@@ -189,8 +261,16 @@ void updateTarget(const TargetBpmResult& result)
     targetBpm = result.targetBpm;
     activeZone = result.zone;
     haveTargetBpm = true;
+    if (uiUpdateQueue != nullptr) {
+        UiUpdateElement update{};
+        update.type = UiUpdateType::Analysis;
+        update.timestampMs = millis();
+        update.targetBpm = targetBpm;
+        update.zone = activeZone;
+        xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+    }
 
-    if (automaticMode && (!initialSelectionAttempted || zoneChanged)) {
+    if (automaticMode && playMode == PlayMode::Enjoy && (!initialSelectionAttempted || zoneChanged)) {
         initialSelectionAttempted = true;
         selectSongForTarget(false);
     }
@@ -198,6 +278,16 @@ void updateTarget(const TargetBpmResult& result)
 
 void handlePlaybackEvent(const AudioPlaybackEvent& event)
 {
+    if (event.songIndex <= DEMO_SONG_BASE) {
+        const int level = DEMO_SONG_BASE - event.songIndex;
+        if (!automaticMode || playMode != PlayMode::Demo || level != motionLevel) return;  // stale event
+        if (event.type == AudioPlaybackEventType::Finished) {
+            playDemoForLevel();
+        } else {
+            LOGW(TAG, "DEMO_%02d.mp3 failed; silent until the motion level changes", level);
+        }
+        return;
+    }
     if (!automaticMode || event.songIndex < 0 ||
         event.songIndex >= static_cast<int>(MUSIC_LIBRARY_MAX)) {
         LOGD(TAG, "playback event ignored (automatic=%d songIndex=%d)", automaticMode ? 1 : 0,
@@ -208,9 +298,8 @@ void handlePlaybackEvent(const AudioPlaybackEvent& event)
          static_cast<int>(event.songIndex), event.songIndex == currentSong ? "" : " (not the current song)");
 
     if (event.type == AudioPlaybackEventType::Failed) {
-        failedSongMask |= (1u << event.songIndex);
-        LOGW(TAG, "song #%d marked unplayable (failed mask=0x%08lX)", static_cast<int>(event.songIndex),
-             static_cast<unsigned long>(failedSongMask));
+        failedSongMask[event.songIndex / 32] |= 1u << (event.songIndex % 32);
+        LOGW(TAG, "song #%d marked unplayable", static_cast<int>(event.songIndex));
     }
     if (musicBpmAnalysisBusy) {
         if (event.songIndex == currentSong) {
@@ -233,12 +322,61 @@ void handlePlaybackEvent(const AudioPlaybackEvent& event)
         selectSongForTarget(true);
     }
 }
+void reportTrain()
+{
+    if (uiUpdateQueue == nullptr) return;
+    UiUpdateElement update{};
+    update.type = UiUpdateType::Train;
+    update.timestampMs = millis();
+    update.trainPlan = trainPlan;
+    update.trainStage = trainStage;
+    update.trainRemainingS = trainRemainingS;
+    xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+}
+
+void enterManualMode();
+
+// Advances the Train plan; a new stage switches the song at once, the end stops playback (= manual stop).
+void updateTraining()
+{
+    if (!automaticMode || playMode != PlayMode::Train || !trainRunning) return;
+    const uint32_t now = millis();
+    trainElapsedMs += now - trainLastTickMs;
+    trainLastTickMs = now;
+    uint16_t remaining = 0;
+    const uint8_t stage = train_stage_at(TRAIN_PLANS[trainPlan], trainElapsedMs, &remaining);
+    if (stage == TRAIN_STAGE_DONE) {
+        LOGI(TAG, "Train %s finished; playback stopped", TRAIN_PLANS[trainPlan].name);
+        trainRunning = false;
+        trainStage = TRAIN_STAGE_DONE;
+        trainRemainingS = 0;
+        enterManualMode();
+        AudioCmdElement stop{};
+        stop.command = AudioCommandType::Stop;
+        sendAudioCommand(stop);
+        reportTrain();
+        return;
+    }
+    const bool stageChanged = stage != trainStage;
+    if (!stageChanged && remaining == trainRemainingS) return;
+    trainStage = stage;
+    trainRemainingS = remaining;
+    reportTrain();
+    if (stageChanged) {
+        LOGI(TAG, "Train stage %u/%u: zone %u, %u s", static_cast<unsigned>(stage + 1),
+             static_cast<unsigned>(TRAIN_PLANS[trainPlan].stageCount),
+             static_cast<unsigned>(TRAIN_PLANS[trainPlan].stages[stage].zone), static_cast<unsigned>(remaining));
+        selectSongForTarget(false);
+    }
+}
+
 void enterManualMode()
 {
     LOGI(TAG, "manual control takes priority; automatic selection stopped");
     setPlayMode(PlayMode::Manual);
     automaticSongActive = false;
     pendingAutoPlay = false;
+    demoPending = false;
 }
 
 void sendManualCommand(AudioCmdElement& command)
@@ -247,24 +385,62 @@ void sendManualCommand(AudioCmdElement& command)
     sendAudioCommand(command);  // failure is logged there
 }
 
-void enableAutomaticMode(PlayMode mode)
+void enableAutomaticMode(PlayMode mode, uint8_t plan = 0)
 {
+    const bool leavingDemo = playMode == PlayMode::Demo && mode != PlayMode::Demo;
     setPlayMode(mode);
+    memset(failedSongMask, 0, sizeof(failedSongMask));
+    initialSelectionAttempted = false;
+    if (mode == PlayMode::Train) {
+        if (plan >= TRAIN_PLAN_COUNT) plan = 0;
+        demoPending = false;
+        trainLastTickMs = millis();
+        if (!trainRunning || plan != trainPlan) {
+            trainPlan = plan;
+            trainElapsedMs = 0;
+            trainRunning = true;
+            trainStage = TRAIN_STAGE_DONE;  // first tick reports stage 0 as new and selects its song
+            LOGI(TAG, "Train %s started", TRAIN_PLANS[plan].name);
+            updateTraining();
+        } else {
+            LOGI(TAG, "Train %s resumed at %lu s", TRAIN_PLANS[plan].name,
+                 static_cast<unsigned long>(trainElapsedMs / 1000));
+            reportTrain();
+            selectSongForTarget(false);
+        }
+        if (leavingDemo && !automaticSongActive) {
+            AudioCmdElement stop{};
+            stop.command = AudioCommandType::Stop;
+            sendAudioCommand(stop);  // nothing selectable: the DEMO track must not keep playing
+        }
+        return;
+    }
+    if (mode == PlayMode::Demo) {
+        currentSong = -1;
+        automaticSongActive = false;
+        pendingAutoPlay = false;
+        playDemoForLevel();
+        return;
+    }
+    demoPending = false;
     LOGI(TAG, "automatic mode enabled (haveTarget=%d target=%u); failed-song list cleared", haveTargetBpm ? 1 : 0,
          static_cast<unsigned>(targetBpm));
-    failedSongMask = 0;
-    initialSelectionAttempted = false;
     if (haveTargetBpm) {
         initialSelectionAttempted = true;
         selectSongForTarget(false);
     } else {
+        if (leavingDemo) {
+            AudioCmdElement stop{};
+            stop.command = AudioCommandType::Stop;
+            sendAudioCommand(stop);  // the DEMO track must not keep playing in a heart-rate mode
+        }
         LOGI(TAG, "automatic mode enabled; waiting for a valid heart rate");
     }
 }
 
 void reportBpmAnalysis(BpmAnalysisState state, BpmAnalysisMode mode,
-                       uint8_t current = 0, uint8_t total = 0,
-                       uint8_t succeeded = 0, uint8_t failed = 0)
+                       uint16_t current = 0, uint16_t total = 0,
+                       uint16_t succeeded = 0, uint16_t failed = 0)
 {
     if (uiUpdateQueue == nullptr) return;
     UiUpdateElement update{};
@@ -302,9 +478,30 @@ void startBpmAnalysis(BpmAnalysisMode mode)
     reportBpmAnalysis(BpmAnalysisState::Queued, mode);
 }
 
+// Software standby: stop everything that runs; BLETask / analysisTask follow systemStandby.
+// playMode is kept for display, but automatic selection stays off until the user picks a mode again.
+void enterStandby()
+{
+    LOGI(TAG, "power off: entering standby (mode %s kept, automatic selection off)", modeLabel(playMode));
+    automaticMode = false;
+    automaticSongActive = false;
+    pendingAutoPlay = false;
+    demoPending = false;
+    AudioCmdElement command{};
+    command.command = AudioCommandType::CancelBpmAnalysis;
+    sendAudioCommand(command);
+    command.command = AudioCommandType::Stop;
+    sendAudioCommand(command);  // the amps go back to shutdown once playback stops
+    systemStandby = true;
+}
+
 void handleUiCommand(const UiCommandElement& cmd)
 {
     AudioCmdElement command{};
+    if (systemStandby && cmd.command != UiCommandType::PowerOn) {
+        LOGW(TAG, "UI command %s ignored in standby", uiCommandName(cmd.command));
+        return;
+    }
     if (cmd.command == UiCommandType::SetMode) {
         LOGI(TAG, "UI command: SetMode %s", modeLabel(cmd.mode));
     } else if (cmd.command == UiCommandType::SetVolume) {
@@ -316,10 +513,13 @@ void handleUiCommand(const UiCommandElement& cmd)
     case UiCommandType::SetMode:
         if (cmd.mode == PlayMode::Manual) {
             if (automaticMode) enterManualMode();
-        } else if (automaticMode) {
-            setPlayMode(cmd.mode);  // Enjoy <-> Train keeps the current song
+        } else if (automaticMode && cmd.mode == PlayMode::Enjoy && playMode != PlayMode::Demo) {
+            setPlayMode(cmd.mode);  // Train -> Enjoy keeps the current song
+        } else if (automaticMode && cmd.mode == PlayMode::Train && playMode == PlayMode::Train &&
+                   cmd.trainPlan == trainPlan) {
+            LOGD(TAG, "Train %s already running", TRAIN_PLANS[trainPlan].name);
         } else {
-            enableAutomaticMode(cmd.mode);
+            enableAutomaticMode(cmd.mode, cmd.trainPlan);
         }
         break;
     case UiCommandType::Pause:
@@ -369,6 +569,19 @@ void handleUiCommand(const UiCommandElement& cmd)
     case UiCommandType::SetImuSource:
         sendAnalysisSource(AnalysisCmdType::SetMotionSource, cmd.source);
         break;
+    case UiCommandType::PowerOff:
+        enterStandby();
+        break;
+    case UiCommandType::RestartTrain:
+        if (!automaticMode || playMode != PlayMode::Train) break;
+        trainRunning = false;  // enableAutomaticMode starts the plan over
+        enableAutomaticMode(PlayMode::Train, trainPlan);
+        break;
+    case UiCommandType::PowerOn:
+        if (!systemStandby) break;
+        systemStandby = false;
+        LOGI(TAG, "power on: playback stays stopped until a mode or song is chosen");
+        break;
     }
 }
 void handleSerialCommand(String input)
@@ -380,6 +593,16 @@ void handleSerialCommand(String input)
     AudioCmdElement command{};
     if (input.equalsIgnoreCase("auto")) {
         enableAutomaticMode(PlayMode::Enjoy);
+    } else if (input.equalsIgnoreCase("demo")) {
+        enableAutomaticMode(PlayMode::Demo);
+    } else if (input.equalsIgnoreCase("train") || input.startsWith("train ")) {
+        // train [1|2]: built-in plan number, default 1
+        const long plan = input.length() > 6 ? input.substring(6).toInt() : 1;
+        if (plan < 1 || plan > TRAIN_PLAN_COUNT) {
+            LOGW(TAG, "serial: usage: train [1..%u]", static_cast<unsigned>(TRAIN_PLAN_COUNT));
+            return;
+        }
+        enableAutomaticMode(PlayMode::Train, static_cast<uint8_t>(plan - 1));
     } else if (input.startsWith("src ")) {
         // src ppg|motion chest|watch|local
         const bool ppg = input.startsWith("src ppg ");
@@ -451,6 +674,11 @@ void controlTask(void* parameter)
             updateTarget(result);
         }
 
+        uint8_t level = 0;
+        if (motionLevelQueue != nullptr && xQueueReceive(motionLevelQueue, &level, 0) == pdPASS) {
+            updateMotionLevel(level);
+        }
+
         AudioPlaybackEvent event{};
         while (audioPlaybackEventQueue != nullptr &&
                xQueueReceive(audioPlaybackEventQueue, &event, 0) == pdPASS) {
@@ -464,13 +692,17 @@ void controlTask(void* parameter)
         }
 
         if (Serial.available()) {
-            handleSerialCommand(Serial.readStringUntil('\n'));
+            const String input = Serial.readStringUntil('\n');
+            if (systemStandby) LOGW(TAG, "serial command ignored in standby");
+            else handleSerialCommand(input);
         }
 
         if (pendingAutoPlay && automaticMode) {
             if (!musicBpmAnalysisBusy) LOGD(TAG, "retrying deferred automatic selection");
             selectSongForTarget(pendingAfterFinish);
         }
+        if (demoPending && !musicBpmAnalysisBusy) playDemoForLevel();
+        updateTraining();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

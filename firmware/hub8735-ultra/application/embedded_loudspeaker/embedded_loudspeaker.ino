@@ -19,12 +19,14 @@ QueueHandle_t ppgSensorQueue = nullptr;
 QueueHandle_t accSensorQueue = nullptr;
 QueueHandle_t gyroSensorQueue = nullptr;
 QueueHandle_t targetBpmResultQueue = nullptr;
+QueueHandle_t motionLevelQueue = nullptr;
 QueueHandle_t audioCmdQueue = nullptr;
 QueueHandle_t audioPlaybackEventQueue = nullptr;
 QueueHandle_t uiUpdateQueue = nullptr;
 QueueHandle_t bleTxQueue = nullptr;
 QueueHandle_t uiCmdQueue = nullptr;
 QueueHandle_t analysisCmdQueue = nullptr;
+QueueHandle_t bleCmdQueue = nullptr;
 volatile SensorSource activePpgSource = SensorSource::Chest;
 volatile SensorSource activeImuSource = SensorSource::Chest;
 
@@ -32,28 +34,19 @@ UserInfo userInfo;
 volatile bool musicLibraryReady = false;
 volatile bool musicStorageReady = false;
 volatile bool musicBpmAnalysisBusy = false;
+volatile bool systemStandby = false;
 
 void setup()
 {
     // Hold both amps in shutdown from the very start of boot.
-    pinMode(AMP_SD_PIN_RIGHT, OUTPUT);
-    digitalWrite(AMP_SD_PIN_RIGHT, LOW);
-    pinMode(AMP_SD_PIN_LEFT, OUTPUT);
-    digitalWrite(AMP_SD_PIN_LEFT, LOW);
+    pinMode(AMP_SD_PIN, OUTPUT);
+    digitalWrite(AMP_SD_PIN, LOW);
 
     // 初始化串口
-    #ifdef DEBUG_MODE
     Serial.begin(2000000);
-    #else
-    Serial2.begin(115200);
-    #endif
     logInit();
     LOGI("MAIN", "embedded_loudspeaker build %s %s, log level=%d", __DATE__, __TIME__, LOG_LEVEL);
-    #ifdef DEBUG_MODE
-    LOGI("MAIN", "log port: USB Type-C Serial (2000000 baud)");
-    #else
-    LOGI("MAIN", "log port: Serial2 (115200 baud), TX = D8 shared with UI button");
-    #endif
+    LOGI("MAIN", "log port: Serial (LOG UART, 2000000 baud), TX = D17 / RX = D16");
 
     userInfo.age = 25;
     userInfo.weight = 70.5;

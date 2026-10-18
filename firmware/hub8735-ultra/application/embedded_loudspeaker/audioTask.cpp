@@ -16,7 +16,7 @@ MusicBpmAnalyzer bpmAnalyzer;
 MusicGenreClassifier genreClassifier;
 bool currentPlaybackAutomatic = false;
 bool playbackPaused = false;
-int8_t currentAutomaticSongIndex = -1;
+int16_t currentAutomaticSongIndex = -1;
 
 struct BpmScanTrack {
     char filename[MUSIC_FILE_MAX];
@@ -34,10 +34,10 @@ struct BpmScanJob {
     bool fileFailed;
     BpmAnalysisMode mode;
     BpmScanTrack tracks[MUSIC_LIBRARY_MAX];
-    uint8_t count;
-    uint8_t index;
-    uint8_t succeeded;
-    uint8_t failed;
+    uint16_t count;
+    uint16_t index;
+    uint16_t succeeded;
+    uint16_t failed;
 };
 
 BpmScanJob bpmScan{};
@@ -110,11 +110,11 @@ int findLibraryEntry(const char* filename)
 
 void countFailure()
 {
-    if (bpmScan.failed < 0xFF) ++bpmScan.failed;
+    if (bpmScan.failed < 0xFFFF) ++bpmScan.failed;
     LOGD(BPM_TAG, "failure counted (now %u)", static_cast<unsigned>(bpmScan.failed));
 }
 
-void reportBpmAnalysis(BpmAnalysisState state, uint8_t current = 0,
+void reportBpmAnalysis(BpmAnalysisState state, uint16_t current = 0,
                        const char* filename = nullptr)
 {
     if (uiUpdateQueue == nullptr) return;
@@ -125,7 +125,7 @@ void reportBpmAnalysis(BpmAnalysisState state, uint8_t current = 0,
     update.bpmAnalysisMode = bpmScan.mode;
     update.bpmAnalysisCurrent = current;
     const unsigned total = bpmScan.count + bpmScan.failed;
-    update.bpmAnalysisTotal = total > 0xFF ? 0xFF : static_cast<uint8_t>(total);
+    update.bpmAnalysisTotal = total > 0xFFFF ? 0xFFFF : static_cast<uint16_t>(total);
     update.bpmAnalysisSucceeded = bpmScan.succeeded;
     update.bpmAnalysisFailed = bpmScan.failed;
     if (filename != nullptr) {
@@ -265,8 +265,8 @@ bool beginBpmScan()
     }
 
     bool catalogChanged = false;
-    uint8_t writeIndex = 0;
-    for (uint8_t i = 0; i < bpmScan.count; ++i) {
+    uint16_t writeIndex = 0;
+    for (uint16_t i = 0; i < bpmScan.count; ++i) {
         const BpmScanTrack track = bpmScan.tracks[i];
         int index = findLibraryEntry(track.filename);
         const bool isNew = index < 0;
@@ -340,7 +340,7 @@ void advanceBpmScan()
     }
 
     BpmScanTrack& track = bpmScan.tracks[bpmScan.index];
-    const uint8_t current = static_cast<uint8_t>(bpmScan.index + 1);
+    const uint16_t current = static_cast<uint16_t>(bpmScan.index + 1);
     const int index = findLibraryEntry(track.filename);
     if (index < 0) {
         bpmScan.fileFailed = true;
@@ -445,7 +445,7 @@ void discardBpmScanForPlayback()
     }
 }
 
-void sendPlaybackEvent(AudioPlaybackEventType type, int8_t songIndex)
+void sendPlaybackEvent(AudioPlaybackEventType type, int16_t songIndex)
 {
     if (audioPlaybackEventQueue == nullptr) return;
     AudioPlaybackEvent event{};
@@ -482,6 +482,17 @@ void handleAudioCommand(AudioCmdElement& command)
         const bool automatic = command.isAutomatic != 0;
         if (!isAllowedMusicFile(command.filename)) {
             LOGW(TAG, "rejected audio file (not .mp3): '%s'", command.filename);
+            if (automatic) {
+                sendPlaybackEvent(AudioPlaybackEventType::Failed, command.songIndex);
+            }
+            return;
+        }
+
+        // File::open uses FA_OPEN_ALWAYS and would create an empty file for a missing name.
+        FILINFO info{};
+        const String path = String(fs.getRootPath() != nullptr ? fs.getRootPath() : "") + command.filename;
+        if (f_stat(path.c_str(), &info) != FR_OK || info.fsize == 0) {
+            LOGW(TAG, "audio file missing or empty: '%s'", command.filename);
             if (automatic) {
                 sendPlaybackEvent(AudioPlaybackEventType::Failed, command.songIndex);
             }
@@ -610,11 +621,11 @@ void audioTask(void* parameter)
         LOGE(TAG, "MAX98357 amplifier init FAILED; playback disabled");
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    amp.setShutdownPin(AMP_SD_PIN_RIGHT, AMP_SD_PIN_LEFT);
+    amp.setShutdownPin(AMP_SD_PIN);
     amp.setVolume(0.5f);
     musicStorageReady = true;
-    LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pins D%u/D%u); audio storage ready",
-         static_cast<unsigned>(AMP_SD_PIN_RIGHT), static_cast<unsigned>(AMP_SD_PIN_LEFT));
+    LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pin D%u); audio storage ready",
+         static_cast<unsigned>(AMP_SD_PIN));
 
     for (;;) {
         AudioCmdElement command{};

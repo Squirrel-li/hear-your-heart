@@ -40,11 +40,7 @@ void logWrite(uint8_t level, const char* tag, const char* fmt, ...)
     if (static_cast<size_t>(n) > sizeof(lineBuf) - 2) n = sizeof(lineBuf) - 2;  // truncated
     lineBuf[n++] = '\n';
 
-#ifdef DEBUG_MODE
     Serial.write(reinterpret_cast<const uint8_t*>(lineBuf), n);
-#else
-    Serial2.write(reinterpret_cast<const uint8_t*>(lineBuf), n);
-#endif
 
     if (locked) xSemaphoreGive(logMutex);
 }

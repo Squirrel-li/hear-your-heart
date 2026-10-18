@@ -10,17 +10,10 @@
 #include "debug.h"
 #include "globalData.h"
 
-#define TARGET_NAME "BLE_sensor_ITAP"
+#define CHEST_NAME "BLE_sensor_ITAP"
+#define WATCH_NAME "BLE_watch_ITAP"
 
 #define STRING_BUF_SIZE 100
-
-
-extern BLEAdvertData foundDevice;
-extern BLEAdvertData targetDevice;
-extern BLEClient* client;
-extern BLERemoteService* UartService;
-extern BLERemoteCharacteristic* Rx;
-extern BLERemoteCharacteristic* Tx;
 
 void scanCB(T_LE_CB_DATA* p_data);
 

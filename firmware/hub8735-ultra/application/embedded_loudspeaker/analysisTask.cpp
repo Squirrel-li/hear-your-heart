@@ -1,6 +1,7 @@
 #include "analysisTask.h"
 
 #include "localSensor.h"
+#include "motion_level.h"
 
 namespace {
 
@@ -100,6 +101,7 @@ void analysisTask(void* parameter)
     if (hrmaxBpm == 0) LOGE("ANALYSIS", "HRmax is 0 (invalid user info); target BPM will never be produced");
     TargetBpmState bpmState{hrmaxBpm, 0};
     HeartZoneState zoneState{};
+    MotionLevelState motionState{};
     PpgSensorElement latest{};
     AccElement accElement{};
     GyroElement gyroElement{};
@@ -110,6 +112,7 @@ void analysisTask(void* parameter)
     uint8_t lastQueuedZone = 0;
     bool wasFresh = false;
     uint8_t lastZoneSeen = 0;
+    bool wasStandby = false;
     localSensorInit();  // 預設來源是胸帶，本地感測器保持關閉
 
     for (;;) {
@@ -130,12 +133,29 @@ void analysisTask(void* parameter)
             current = cmd.source;
             // 清掉舊來源殘留的樣本，避免被當成新來源的資料。
             xQueueReset(isPpg ? ppgSensorQueue : accSensorQueue);
-            if (!isPpg) xQueueReset(gyroSensorQueue);
+            if (!isPpg) {
+                xQueueReset(gyroSensorQueue);
+                motion_level_reset_samples(motionState);
+            }
             if (isPpg) {
                 // 新來源尚無有效心率；目標 BPM 沿用最後值，Zone 變更重新計時。
                 haveValidPpg = false;
                 zoneState.pending = 0;
             }
+        }
+
+        // 待機時本地感測器斷電；喚醒後依原來源重新開啟（來源設定保留）。
+        if (systemStandby != wasStandby) {
+            wasStandby = systemStandby;
+            const bool on = !wasStandby;
+            LOGI("ANALYSIS", "%s: local sensors %s", on ? "wake" : "standby", on ? "restored" : "powered down");
+            if ((!on || activePpgSource == SensorSource::Local) && !localPpgSetEnabled(on)) {
+                LOGE("ANALYSIS", "local PPG re-enable failed after wake");
+            }
+            if ((!on || activeImuSource == SensorSource::Local) && !localImuSetEnabled(on)) {
+                LOGE("ANALYSIS", "local IMU re-enable failed after wake");
+            }
+            haveValidPpg = false;  // 喚醒後等新的有效心率；目標 BPM 沿用最後值
         }
 
         localSensorPoll();  // 選了本地來源才會有資料；樣本與 BLE 走同一組 queue
@@ -209,9 +229,24 @@ void analysisTask(void* parameter)
             zoneState.pending = 0; // Stale sensor data cannot confirm a Zone change.
         }
 
-        if (xQueueReceive(accSensorQueue, &accElement, 0) == pdPASS) {
+        while (xQueueReceive(accSensorQueue, &accElement, 0) == pdPASS) {
             LOGT("ANALYSIS", "Acc recv: %d,%d,%d sequence=%lu", accElement.acc_x, accElement.acc_y,
                  accElement.acc_z, static_cast<unsigned long>(accElement.sequence));
+            motion_level_add(motionState, accElement.acc_x, accElement.acc_y, accElement.acc_z);
+        }
+        const uint32_t bucketBefore = motionState.bucketStartMs;
+        const bool hadSamples = motionState.bucketCount != 0;
+        const int newLevel = motion_level_update(motionState, now);
+        if (motionState.bucketStartMs != bucketBefore && hadSamples) {
+            LOGD("ANALYSIS", "motion mean=%u mg level=%u pending=%d", static_cast<unsigned>(motionState.lastMeanMg),
+                 static_cast<unsigned>(motionState.active),
+                 motionState.pending == MOTION_LEVEL_NONE ? -1 : static_cast<int>(motionState.pending));
+        }
+        if (newLevel >= 0) {
+            const uint8_t level = static_cast<uint8_t>(newLevel);
+            LOGI("ANALYSIS", "motion level -> %u (mean %u mg)", static_cast<unsigned>(level),
+                 static_cast<unsigned>(motionState.lastMeanMg));
+            if (motionLevelQueue != nullptr) xQueueOverwrite(motionLevelQueue, &level);
         }
         if (xQueueReceive(gyroSensorQueue, &gyroElement, 0) == pdPASS) {
             LOGT("ANALYSIS", "Gyro recv: %d,%d,%d sequence=%lu", gyroElement.gyro_x, gyroElement.gyro_y,
