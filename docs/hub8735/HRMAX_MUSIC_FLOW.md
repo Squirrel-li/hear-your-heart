@@ -27,7 +27,7 @@
 
 ## 選歌與切歌
 
-曲目 metadata 從 SD 卡根目錄的 music_library.json 載入至 musicLibrary；song_catalog.h 負責 BPM 選曲。SD 範例清單有 16 首，容量上限 32 首；符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。BPM 為 0 的未分析曲目不參加自動選曲。
+曲目 metadata 從 SD 卡根目錄的 music_library.json 載入至 musicLibrary；song_catalog.h 負責 BPM 選曲。SD 範例清單有 16 首，容量上限 1024 首；符合條件為歌曲 BPM 與目標 BPM 相差不超過目標值的 5%。BPM 為 0 的未分析曲目不參加自動選曲。
 
 - 首次選歌、穩定 Zone 切換：`controlTask` 從目前歌曲的下一首起依序找符合曲目；Zone 切換確認後立即送播放命令。完全沒有符合曲目時播放 BPM 最近的一首。若結果仍是目前歌曲，維持播放。
 - 同一 Zone 內目標 BPM 改變：目前歌曲繼續播完，播畢後用最新目標選下一首。
@@ -35,9 +35,35 @@
 - 播放失敗：`audioTask` 回報失敗曲目索引，`controlTask` 跳過該曲並嘗試下一首；所有曲目都失敗時停止自動播放。
 - PPG 無效或暫時失聯：不更新目標 BPM，也不確認新的 Zone；目前歌曲繼續播放。
 
+## Train 模式（訓練課表）
+
+課表定義於 `train_plan.h`，由 `controlTask` 依時間推進；實際心率只顯示、不影響選曲，不需有效心率即可開始。
+
+| 課表（OLED Mode／序列埠） | 段落（Zone／時長） |
+| --- | --- |
+| `Train 11m`／`train 1` | Z2 3分 → Z4 2分 → Z2 2分 → Z5 1分 → Z1 3分 |
+| `Train 5m`／`train 2` | 同上順序，每段1分（展示用） |
+
+- 段落歌曲 BPM = 該 Zone 中點心率：55／65／75／85／95% HRmax（HRmax = 206.9 − 0.67 × 年齡，四捨五入）。年齡25（HRmax 190）時為105／124／143／162／181 BPM；曲庫沒有夠快的曲目時選最接近者。
+- 換段時立即用新 BPM 選歌（與 Enjoy 換 Zone 相同的選曲規則）；段內歌曲播畢則依同段 BPM 選下一首。
+- OLED 在 Mode 清單選 Train 後彈出課表清單，選定才開始。全部段落結束後停止播放並轉為 Manual，Mode 列顯示 `Mode: Train done`。
+- 暫停／停止／手動選歌（Manual）或待機時進度凍結；再選同一課表從中斷處接續，選其他課表或已完成則從頭開始。自 Train 切到 Enjoy 不換歌，進度同樣保留。
+- 主機檢查：`g++ -std=c++11 -Ifirmware/hub8735-ultra/application/embedded_loudspeaker firmware/hub8735-ultra/tests/train_plan_check.cpp`。
+
+## OLED 主選單依模式變化
+
+| 模式 | Mode 列下方多出的列 | Songs |
+| --- | --- | --- |
+| Enjoy | ` Z3 Target 142 BPM`（唯讀；尚無有效心率顯示 `Target: wait HR`） | 隱藏 |
+| Train | ` Stage 2/5 1:23`（段/總段、本段剩餘時間；按 OK 從第一段重新開始） | 隱藏 |
+| Demo | ` Level: 2`（運動強度 0~4，唯讀） | 隱藏 |
+| Manual | 無 | 顯示 |
+
+其餘項目（Play/Pause、Stop、Volume、BPM Analysis、Source、BLE、Power off）各模式都有。模式切換時游標停在原本的項目上。
+
 ## OLED 手動選歌
 
-- 主選單的 Songs 列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
+- 只有 Manual 模式的主選單有 Songs，列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
 - 曲庫未載入、BPM 分析進行中或沒有曲目時不開啟清單。未分析 BPM 的曲目可手動播放，但不參加自動選曲。
 
 ## OLED 手動 BPM 分析

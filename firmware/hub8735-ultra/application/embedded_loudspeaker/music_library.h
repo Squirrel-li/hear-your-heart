@@ -7,10 +7,11 @@
 #include <stdio.h>
 
 constexpr const char* MUSIC_LIBRARY_FILE = "music_library.json";
-constexpr size_t MUSIC_LIBRARY_MAX = 32;
+constexpr size_t MUSIC_LIBRARY_MAX = 1024;
 constexpr size_t MUSIC_FILE_MAX = 32;
 constexpr size_t MUSIC_GENRE_MAX = 16;
-constexpr size_t MUSIC_LIBRARY_JSON_MAX = 5120;  // Includes per-file size and timestamp metadata.
+// A formatted entry is at most ~120 bytes; 160 leaves room for hand-edited whitespace.
+constexpr size_t MUSIC_LIBRARY_JSON_MAX = MUSIC_LIBRARY_MAX * 160 + 64;
 
 struct MusicEntry {
     char file[MUSIC_FILE_MAX];
@@ -214,7 +215,7 @@ int main(void)
     assert(strcmp(lib.entries[1].file, "bpm117.mp3") == 0 && lib.entries[1].bpm == 117);
     assert(strcmp(lib.entries[1].genre, "Pop") == 0);
 
-    char buf[MUSIC_LIBRARY_JSON_MAX];
+    static char buf[MUSIC_LIBRARY_JSON_MAX];
     const size_t n = music_json::format(lib, buf, sizeof(buf));
     assert(n > 0);
     static MusicLibrary back;

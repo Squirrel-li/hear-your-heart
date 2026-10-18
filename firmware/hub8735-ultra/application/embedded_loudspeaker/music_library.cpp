@@ -10,7 +10,8 @@ namespace {
 constexpr const char* TAG = "LIBRARY";
 constexpr const char* MUSIC_LIBRARY_BACKUP_FILE = "music_library.bak";
 constexpr const char* MUSIC_LIBRARY_CORRUPT_FILE = "music_library.corrupt";
-char jsonBuf[MUSIC_LIBRARY_JSON_MAX];  // Keep the 5 KB buffer off the 4 KB task stack.
+char jsonBuf[MUSIC_LIBRARY_JSON_MAX];  // ~160 KB; static so it stays off the 4 KB task stack.
+MusicLibrary loaded;                   // ~60 KB load scratch copy, static for the same reason.
 
 bool libraryPath(AmebaFatFS& fs, const char* name, char* path, size_t cap)
 {
@@ -87,7 +88,7 @@ bool writeLibraryFile(AmebaFatFS& fs, const char* name,
 
 bool musicLibraryLoad(AmebaFatFS& fs)
 {
-    MusicLibrary loaded{};
+    loaded.count = 0;  // no MusicLibrary{} temporary: it would put ~60 KB on the stack
     char path[64], backup[64], corrupt[64];
     if (!libraryPath(fs, MUSIC_LIBRARY_FILE, path, sizeof(path)) ||
         !libraryPath(fs, MUSIC_LIBRARY_BACKUP_FILE, backup, sizeof(backup)) ||
@@ -112,7 +113,7 @@ bool musicLibraryLoad(AmebaFatFS& fs)
     }
 
     LOGW(TAG, "%s missing or invalid; trying backup %s", MUSIC_LIBRARY_FILE, MUSIC_LIBRARY_BACKUP_FILE);
-    loaded = MusicLibrary{};
+    loaded.count = 0;  // no MusicLibrary{} temporary: it would put ~60 KB on the stack
     if (readLibraryFile(fs, MUSIC_LIBRARY_BACKUP_FILE, loaded)) {
         musicLibrary = loaded;
         // Recover the previous valid catalog without overwriting a corrupt main file.
@@ -203,7 +204,7 @@ bool musicLibrarySave(AmebaFatFS& fs, const MusicLibrary& lib)
     }
 
     if (hasMain && fs.exists(backup)) fs.remove(backup);
-    musicLibrary = lib;
+    if (&lib != &musicLibrary) musicLibrary = lib;  // callers usually save musicLibrary itself
     LOGD(TAG, "saved %u songs", static_cast<unsigned>(lib.count));
     return true;
 }

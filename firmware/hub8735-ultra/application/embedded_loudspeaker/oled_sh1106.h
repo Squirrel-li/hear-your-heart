@@ -47,6 +47,9 @@ public:
 
     void clearDisplay() { memset(buffer_, 0, sizeof(buffer_)); }
 
+    // Panel sleep (0xAE) / wake (0xAF); RAM content is kept.
+    bool setPower(bool on) { return command(on ? 0xAF : 0xAE); }
+
     void drawPixel(int16_t x, int16_t y, uint16_t color) override
     {
         if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) return;

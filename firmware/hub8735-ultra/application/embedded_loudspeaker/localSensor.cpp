@@ -172,8 +172,11 @@ bool imuReadBlock(uint8_t reg, uint8_t* buf, uint8_t n)
 }
 
 constexpr uint8_t LSM_OUTX_L_G = 0x22;  // 陀螺儀 XYZ 接著加速度計 XYZ，little-endian
-constexpr uint32_t IMU_PERIOD_MS = 1000;  // 與 N76E003 相同，1 Hz
+// 跟著 ODR 12.5 Hz 連續讀，供 DEMO 運動強度使用（N76E003 仍為 1 Hz）；UI 與 log 維持 1 Hz。
+constexpr uint32_t IMU_PERIOD_MS = 80;
+constexpr uint32_t IMU_REPORT_MS = 1000;
 uint32_t imuLastMs = 0;
+uint32_t imuReportMs = 0;
 uint32_t imuSeq = 0;
 
 int16_t le16(const uint8_t* p)
@@ -192,8 +195,12 @@ void imuPoll()
         LOGW(TAG, "LSM6DS3 read failed");
         return;
     }
-    LOGD(TAG, "IMU acc=%d,%d,%d gyro=%d,%d,%d", le16(&raw[6]), le16(&raw[8]), le16(&raw[10]), le16(&raw[0]),
-         le16(&raw[2]), le16(&raw[4]));
+    const bool report = (uint32_t)(now - imuReportMs) >= IMU_REPORT_MS;
+    if (report) {
+        imuReportMs = now;
+        LOGD(TAG, "IMU acc=%d,%d,%d gyro=%d,%d,%d", le16(&raw[6]), le16(&raw[8]), le16(&raw[10]), le16(&raw[0]),
+             le16(&raw[2]), le16(&raw[4]));
+    }
 
     AccElement acc{};
     acc.hub_rx_time_ms = now;
@@ -211,6 +218,7 @@ void imuPoll()
     gyro.gyro_z = le16(&raw[4]);
     if (xQueueSend(accSensorQueue, &acc, 0) != pdPASS) LOGW(TAG, "Acc queue full, sample dropped");
     if (xQueueSend(gyroSensorQueue, &gyro, 0) != pdPASS) LOGW(TAG, "Gyro queue full, sample dropped");
+    if (!report) return;
 
     UiUpdateElement ui{};
     ui.type = UiUpdateType::Acc;
