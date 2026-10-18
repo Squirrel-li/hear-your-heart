@@ -132,6 +132,7 @@ class PpgCursor {
   PpgDataSet dataSet;
   int nextIndex = 0;
   int cycle = 0;
+  int source = 0;  // msgType high nibble: 0 chest, 1 watch
 
   int get _timestampStep {
     for (var i = 1; i < dataSet.frames.length; i++) {
@@ -167,11 +168,13 @@ class PpgCursor {
     final frame = dataSet.frames[index];
     final timestampOffset = cycleForPayload * _cycleTimestampSpan;
     final sequenceOffset = cycleForPayload * _cycleSequenceSpan;
+    final bytes = frame.payload(
+      timestampOffset: timestampOffset,
+      sequenceOffset: sequenceOffset,
+    );
+    bytes[4] = (source << 4) | (bytes[4] & 0x0f);
     return PpgPayload(
-      bytes: frame.payload(
-        timestampOffset: timestampOffset,
-        sequenceOffset: sequenceOffset,
-      ),
+      bytes: bytes,
       timestamp: frame.timestamp + timestampOffset,
       sequence: frame.sequence + sequenceOffset,
       rawIndex: index,
@@ -223,6 +226,7 @@ class PpgPlayback {
   bool get isPlaying => _playing;
   bool get isLooping => _loop;
   PpgDataSet get dataSet => cursor.dataSet;
+  set source(int value) => cursor.source = value;
 
   Future<bool> sendNext() async {
     if (_playing) return false;

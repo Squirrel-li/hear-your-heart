@@ -26,7 +26,10 @@ class RemoteSensorSimulatorApp extends StatelessWidget {
       );
 }
 
-const _profileLabels = ['FFF0 / FFF1 / FFF2', '524CACC0… / D002 / D001'];
+// 裝置類型 = UUID profile：0 手錶（FFF0），1 胸帶（524CACC0）。HUB 依廣播名稱分辨，frame 依 msgType 高 4 bit。
+const _deviceLabels = ['手錶（FFF0）', '胸帶（524CACC0）'];
+const _deviceNames = ['BLE_watch_ITAP', 'BLE_sensor_ITAP'];
+int _sourceFor(int profile) => profile == 0 ? 1 : 0;
 
 class SimulatorPage extends StatefulWidget {
   const SimulatorPage({super.key});
@@ -37,7 +40,7 @@ class SimulatorPage extends StatefulWidget {
 
 class _SimulatorPageState extends State<SimulatorPage> {
   final _bridge = BleBridge();
-  final _nameController = TextEditingController(text: 'BLE_sensor_ITAP');
+  final _nameController = TextEditingController(text: _deviceNames[0]);
   final _scrollController = ScrollController();
 
   StreamSubscription<Map<dynamic, dynamic>>? _events;
@@ -64,6 +67,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
       _dataSets = await PpgDataLoader.load(rootBundle.loadString);
       final map = await _bridge.initialize();
       _ble = BleStatus.fromMap(map);
+      _nameController.text = _ble.name;
       _createPlayback(_dataSets.first);
     } catch (error) {
       _loadError = '$error';
@@ -79,7 +83,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
       onChanged: () {
         if (mounted) setState(() {});
       },
-    );
+    )..source = _sourceFor(_ble.profile);
   }
 
   Future<bool> _sendPayload(Uint8List bytes) async {
@@ -119,7 +123,7 @@ class _SimulatorPageState extends State<SimulatorPage> {
         'permission_required' => '請允許附近裝置權限後重新啟動 App。',
         'bluetooth_disabled' => '請先開啟手機藍牙。',
         'ble_unsupported' => '手機不支援 BLE Peripheral。',
-        'not_subscribed' => 'HUB8735 尚未訂閱 FFF1，資料未消耗。',
+        'not_subscribed' => 'HUB8735 尚未訂閱 Notify，資料未消耗。',
         null => 'BLE 操作失敗。',
         _ => error,
       };
@@ -143,17 +147,22 @@ class _SimulatorPageState extends State<SimulatorPage> {
     }
   }
 
-  Future<void> _applyProfile(int profile) async {
+  // 切換裝置類型：UUID、廣播名稱與 frame source 一起換。
+  Future<void> _applyDevice(int profile) async {
     try {
-      final map = await _bridge.setProfile(profile);
+      await _bridge.setProfile(profile);
+      final map = await _bridge.setName(_deviceNames[profile]);
+      _playback?.stop();
+      _playback?.source = _sourceFor(profile);
       if (mounted) {
         setState(() {
           _ble = BleStatus.fromMap(map);
-          _message = '已切換 UUID：${_profileLabels[profile]}（需重新開始廣播）。';
+          _nameController.text = _ble.name;
+          _message = '已切換為${_deviceLabels[profile]}（需重新開始廣播）。';
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _message = '切換 UUID 失敗：$error');
+      if (mounted) setState(() => _message = '切換裝置失敗：$error');
     }
   }
 
@@ -287,14 +296,14 @@ class _SimulatorPageState extends State<SimulatorPage> {
             ),
             const SizedBox(height: 10),
             _Section(
-              title: 'UUID 設定',
+              title: '裝置類型',
               child: SegmentedButton<int>(
                 segments: [
-                  for (var i = 0; i < _profileLabels.length; i++)
-                    ButtonSegment(value: i, label: Text(_profileLabels[i], style: const TextStyle(fontSize: 12))),
+                  for (var i = 0; i < _deviceLabels.length; i++)
+                    ButtonSegment(value: i, label: Text(_deviceLabels[i], style: const TextStyle(fontSize: 12))),
                 ],
                 selected: {_ble.profile},
-                onSelectionChanged: (value) => _applyProfile(value.first),
+                onSelectionChanged: (value) => _applyDevice(value.first),
               ),
             ),
             const SizedBox(height: 10),
