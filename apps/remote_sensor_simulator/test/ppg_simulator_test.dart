@@ -77,4 +77,13 @@ void main() {
     expect(first.timestamp, dataSets.last.frames.first.timestamp);
     expect(first.sequence, dataSets.last.frames.first.sequence);
   });
+
+  test('source nibble marks watch frames without changing msgType', () async {
+    final dataSets = await PpgDataLoader.load(rootBundle.loadString);
+    final cursor = PpgCursor(dataSets.first)..source = 1;
+    expect(cursor.peek(loop: false)!.bytes[4], 0x11);
+    cursor.source = 0;
+    expect(cursor.peek(loop: false)!.bytes[4], 0x01);
+    expect(dataSets.first.frames.first.type, 0x01);  // stored frame untouched
+  });
 }

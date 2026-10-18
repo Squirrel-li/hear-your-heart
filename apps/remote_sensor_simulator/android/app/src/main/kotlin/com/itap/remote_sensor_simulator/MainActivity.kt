@@ -63,7 +63,7 @@ class MainActivity : FlutterActivity() {
     private val NOTIFY_UUID get() = PROFILES[profile].second
     private val WRITE_UUID get() = PROFILES[profile].third
 
-    private var broadcastName = "BLE_sensor_ITAP"
+    private var broadcastName = "BLE_watch_ITAP"  // profile 0 (FFF0) = watch
     private var advertising = false
     private var lastNotification = ByteArray(0)
 

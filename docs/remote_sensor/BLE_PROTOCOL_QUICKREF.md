@@ -4,7 +4,7 @@
 
 ## GATT
 
-- sensor = Peripheral，廣播名稱 `BLE_sensor_ITAP`；不配對、不加密。
+- sensor = Peripheral，廣播名稱胸帶 `BLE_sensor_ITAP`、手錶 `BLE_watch_ITAP`（HUB 可同時連兩台）；不配對、不加密。
 - 多位元組欄位一律 Big-endian。
 
 | UUID                                     | 屬性                          | 方向          | 用途       |
