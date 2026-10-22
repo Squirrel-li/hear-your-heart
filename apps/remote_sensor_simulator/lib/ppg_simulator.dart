@@ -15,6 +15,8 @@ class PpgFrame {
   final int timestamp;
   final int sequence;
   int get type => bytes[4];
+  // 0x05 carries N = (length - 10) / 4 samples; every other type one record.
+  int get samples => type == 0x05 ? (bytes.length - 10) ~/ 4 : 1;
 
   Uint8List payload({int timestampOffset = 0, int sequenceOffset = 0}) {
     final result = Uint8List.fromList(bytes);
@@ -42,6 +44,7 @@ class PpgDataLoader {
     PpgSource('IMU：靜止', 'assets/testdata/gsensor_rest.txt'),
     PpgSource('IMU：步行', 'assets/testdata/gsensor_walk.txt'),
     PpgSource('IMU：跑步', 'assets/testdata/gsensor_run.txt'),
+    PpgSource('PPG 原始批次（hr2）', 'assets/testdata/ppg_raw_hr2.txt'),
   ];
 
   static Future<List<PpgDataSet>> load(Future<String> Function(String path) read) async {
@@ -77,6 +80,7 @@ class PpgDataLoader {
         0x01 => 20,      // PPG
         0x02 => 21,      // acc + gyro 合併
         0x03 || 0x04 => 15, // acc / gyro 單獨
+        0x05 => fields.length >= 14 && (fields.length - 10) % 4 == 0 ? fields.length : 0, // PPG 原始批次
         _ => 0,
       };
       final legacyPpgLength = type == 0x01 && fields.length == 21;
@@ -99,7 +103,7 @@ class PpgDataLoader {
         if (frame.timestamp <= previous.timestamp) {
           throw FormatException(source.label + ': timestamp 必須遞增');
         }
-        if (frame.sequence != previous.sequence + 1) {
+        if (frame.sequence != previous.sequence + previous.samples) {
           throw FormatException(source.label + ': sequence 必須連續遞增');
         }
       }
@@ -142,19 +146,11 @@ class PpgCursor {
     return 5000;
   }
 
-  int get _sequenceStep {
-    for (var i = 1; i < dataSet.frames.length; i++) {
-      final step = dataSet.frames[i].sequence - dataSet.frames[i - 1].sequence;
-      if (step > 0) return step;
-    }
-    return 1;
-  }
-
   int get _cycleTimestampSpan =>
       dataSet.frames.last.timestamp - dataSet.frames.first.timestamp + _timestampStep;
 
   int get _cycleSequenceSpan =>
-      dataSet.frames.last.sequence - dataSet.frames.first.sequence + _sequenceStep;
+      dataSet.frames.last.sequence + dataSet.frames.last.samples - dataSet.frames.first.sequence;
 
   PpgPayload? peek({required bool loop}) {
     if (dataSet.frames.isEmpty) return null;

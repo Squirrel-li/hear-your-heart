@@ -23,6 +23,7 @@ bool appQueuesInit()
 {
     bleRxFrameQueue = createQueue("bleRxFrame", 8, sizeof(BleFrameElement));
     ppgSensorQueue  = createQueue("ppgSensor", 16, sizeof(PpgSensorElement));
+    ppgRawQueue     = createQueue("ppgRaw", 32, sizeof(PpgRawElement));  // ~36 samples/s from a 0x05 sender
     accSensorQueue  = createQueue("accSensor", 16, sizeof(AccElement));
     gyroSensorQueue = createQueue("gyroSensor", 16, sizeof(GyroElement));
     targetBpmResultQueue = createQueue("targetBpmResult", 1, sizeof(TargetBpmResult));
@@ -37,6 +38,7 @@ bool appQueuesInit()
 
     return bleRxFrameQueue &&
            ppgSensorQueue &&
+           ppgRawQueue &&
            accSensorQueue &&
            gyroSensorQueue &&
            targetBpmResultQueue &&

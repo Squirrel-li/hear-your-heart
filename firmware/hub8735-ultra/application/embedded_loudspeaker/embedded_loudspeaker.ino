@@ -16,6 +16,7 @@ static TaskHandle_t UITaskHandle = nullptr;
 
 QueueHandle_t bleRxFrameQueue = nullptr;
 QueueHandle_t ppgSensorQueue = nullptr;
+QueueHandle_t ppgRawQueue = nullptr;
 QueueHandle_t accSensorQueue = nullptr;
 QueueHandle_t gyroSensorQueue = nullptr;
 QueueHandle_t targetBpmResultQueue = nullptr;

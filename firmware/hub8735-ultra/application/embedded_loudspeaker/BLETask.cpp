@@ -1,4 +1,5 @@
 #include "BLETask.h"
+#include "ppg_raw_hr.h"
 
 void scanCB(T_LE_CB_DATA* p_data); // defined below, outside the anonymous namespace
 
@@ -51,6 +52,9 @@ volatile uint32_t cbFrames = 0;
 volatile uint32_t cbQueueFull = 0;
 volatile uint32_t cbOversize = 0;
 uint32_t statsPpg = 0, statsAcc = 0, statsGyro = 0, statsBad = 0;
+uint32_t statsRaw = 0, statsRawGap = 0;  // 0x05: samples received, sequence gaps
+uint32_t rawNextSeq = 0;                  // expected 0x05 sequence (first sample of the next frame)
+bool rawHaveSeq = false;
 
 void postUi(const UiUpdateElement& update)
 {
@@ -179,7 +183,7 @@ void processFrame(const BleFrameElement& msg)
             return;
         }
         // 只收與目前選擇相同 source 的 PPG / IMU frame；選的是 Local 時 BLE 端全丟。
-        if ((msgType == 0x01 && frameSource != static_cast<uint8_t>(activePpgSource)) ||
+        if (((msgType == 0x01 || msgType == 0x05) && frameSource != static_cast<uint8_t>(activePpgSource)) ||
             (msgType >= 0x02 && msgType <= 0x04 && frameSource != static_cast<uint8_t>(activeImuSource))) {
             return;
         }
@@ -245,6 +249,32 @@ void processFrame(const BleFrameElement& msg)
                 return; // Skip processing for this frame
             }
             handleGyro(msg, sensor_time_ms, sequence, &msg.data[9], statsGyro);
+        } else if (msgType == 0x05) { // PPG raw batch: status + N x (ppg1, ppg2)
+            if (msg.length < 14 || (msg.length - 10) % 4 != 0) {
+                LOGW(TAG, "PPG raw frame bad length: len=%u (need 10 + 4N, N >= 1)", static_cast<unsigned>(msg.length));
+                ++statsBad;
+                return; // Skip processing for this frame
+            }
+            const uint32_t n = (msg.length - 10) / 4;
+            if (rawHaveSeq && sequence != rawNextSeq) ++statsRawGap;  // also counts a sensor restart / source switch
+            rawNextSeq = sequence + n;
+            rawHaveSeq = true;
+            statsRaw += n;
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint8_t* p = &msg.data[10 + 4 * i];
+                PpgRawElement raw;
+                raw.hub_rx_time_ms = msg.hub_rx_time_ms;
+                raw.sensor_time_ms = ppg_raw_sample_time(sensor_time_ms, n, i);
+                raw.sequence = sequence + i;
+                raw.status = msg.data[9];
+                raw.ppg1 = static_cast<uint16_t>((p[0] << 8) | p[1]);
+                raw.ppg2 = static_cast<uint16_t>((p[2] << 8) | p[3]);
+                LOGT(TAG, "PPG raw sequence=%lu status=%u ppg1=%u ppg2=%u", static_cast<unsigned long>(raw.sequence),
+                     static_cast<unsigned>(raw.status), static_cast<unsigned>(raw.ppg1), static_cast<unsigned>(raw.ppg2));
+                if (xQueueSend(ppgRawQueue, &raw, 0) != pdPASS) {
+                    LOGW(TAG, "PPG raw queue full, sample dropped (sequence=%lu)", static_cast<unsigned long>(raw.sequence));
+                }
+            }
         } else {
             LOGW(TAG, "unknown msgType=0x%02X (len=%u, sequence=%lu)", static_cast<unsigned>(msgType),
                  static_cast<unsigned>(msg.length), static_cast<unsigned long>(sequence));
@@ -506,17 +536,18 @@ void BLETask(void* parameter) {
 
         if ((uint32_t)(millis() - lastStatsMs) >= 5000u) {
             const uint32_t frames = cbFrames, full = cbQueueFull;
-            LOGD(TAG, "5s stats: chest=%s watch=%s rx=%lu (queue full %lu) PPG=%lu Acc=%lu Gyro=%lu bad=%lu, "
-                      "oversize=%lu",
+            LOGD(TAG, "5s stats: chest=%s watch=%s rx=%lu (queue full %lu) PPG=%lu raw=%lu (gap %lu) Acc=%lu Gyro=%lu "
+                      "bad=%lu, oversize=%lu",
                  links[0].up ? "up" : "down", links[1].up ? "up" : "down",
                  static_cast<unsigned long>(frames - statsFrames),
                  static_cast<unsigned long>(full - statsQueueFull),
-                 static_cast<unsigned long>(statsPpg), static_cast<unsigned long>(statsAcc),
+                 static_cast<unsigned long>(statsPpg), static_cast<unsigned long>(statsRaw),
+                 static_cast<unsigned long>(statsRawGap), static_cast<unsigned long>(statsAcc),
                  static_cast<unsigned long>(statsGyro), static_cast<unsigned long>(statsBad),
                  static_cast<unsigned long>(cbOversize));
             statsFrames = frames;
             statsQueueFull = full;
-            statsPpg = statsAcc = statsGyro = statsBad = 0;
+            statsPpg = statsRaw = statsRawGap = statsAcc = statsGyro = statsBad = 0;
             lastStatsMs = millis();
         }
 

@@ -13,6 +13,7 @@ constexpr uint16_t LOG_MESSAGE_MAX = 96;
 
 extern QueueHandle_t bleRxFrameQueue;	// BLE notification callback queue
 extern QueueHandle_t ppgSensorQueue;	// PPG sensor data queue
+extern QueueHandle_t ppgRawQueue;	// Raw PPG samples (msgType 0x05) for the HUB heart-rate algorithm
 extern QueueHandle_t accSensorQueue;	// Accelerometer data queue
 extern QueueHandle_t gyroSensorQueue;	// Gyroscope data queue
 extern QueueHandle_t targetBpmResultQueue;	// Latest analysis result for controlTask
@@ -119,6 +120,16 @@ struct GyroElement {
     int16_t gyro_x;
     int16_t gyro_y;
     int16_t gyro_z;
+};
+
+// One sample of a PPG raw batch (msgType 0x05), sensor_time_ms already rebuilt for this sample.
+struct PpgRawElement {
+    uint32_t hub_rx_time_ms;
+    uint32_t sensor_time_ms;
+    uint32_t sequence;
+    uint8_t status;
+    uint16_t ppg1;
+    uint16_t ppg2;
 };
 
 struct TargetBpmResult {
