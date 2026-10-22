@@ -1,0 +1,239 @@
+{
+  "clean_45": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.1,
+    "bpm": [
+      45,
+      45,
+      45,
+      45,
+      45,
+      46,
+      45,
+      45,
+      45,
+      45
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "clean_72": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.0,
+    "bpm": [
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "clean_120": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.0,
+    "bpm": [
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "clean_180": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.5,
+    "bpm": [
+      180,
+      181,
+      180,
+      180,
+      181,
+      180,
+      181,
+      180,
+      181,
+      181
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "one_channel_72": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.0,
+    "bpm": [
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 0,
+    "old_mae_accepted": null
+  },
+  "both_channels_72": {
+    "state_bytes_host": 174,
+    "accepted": 0,
+    "windows": 11,
+    "mae_accepted": null,
+    "bpm": [],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 53.0
+  },
+  "same_frequency_120": {
+    "state_bytes_host": 174,
+    "accepted": 0,
+    "windows": 11,
+    "mae_accepted": null,
+    "bpm": [],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "flat_72": {
+    "state_bytes_host": 174,
+    "accepted": 0,
+    "windows": 11,
+    "mae_accepted": null,
+    "bpm": [],
+    "old_fresh_accepted": 0,
+    "old_mae_accepted": null
+  },
+  "spikes_72": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.0,
+    "bpm": [
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 1,
+    "old_mae_accepted": 0.0
+  },
+  "drift_72": {
+    "state_bytes_host": 174,
+    "accepted": 9,
+    "windows": 11,
+    "mae_accepted": 0.44,
+    "bpm": [
+      73,
+      72,
+      73,
+      72,
+      73,
+      73,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "gain_step_72": {
+    "state_bytes_host": 174,
+    "accepted": 10,
+    "windows": 11,
+    "mae_accepted": 0.0,
+    "bpm": [
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 4,
+    "old_mae_accepted": 0.0
+  },
+  "gap_72": {
+    "state_bytes_host": 174,
+    "accepted": 8,
+    "windows": 10,
+    "mae_accepted": 0.0,
+    "bpm": [
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72,
+      72
+    ],
+    "old_fresh_accepted": 1,
+    "old_mae_accepted": 0.0
+  },
+  "hr1": {
+    "accepted": 4,
+    "windows": 6,
+    "bpm": [
+      0,
+      56,
+      72,
+      0,
+      60,
+      59
+    ],
+    "ground_truth": false
+  },
+  "hr2": {
+    "accepted": 11,
+    "windows": 13,
+    "bpm": [
+      0,
+      70,
+      77,
+      80,
+      73,
+      70,
+      73,
+      69,
+      68,
+      66,
+      65,
+      0,
+      70
+    ],
+    "ground_truth": false
+  }
+}

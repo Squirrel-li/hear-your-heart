@@ -1,0 +1,94 @@
+{
+  "clean": {
+    "instructions_12s": 8914602,
+    "equivalent_MIPS": 0.7429,
+    "8051_results": [
+      0,
+      72
+    ],
+    "host_results": [
+      0,
+      72
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66,
+    "max_ppg_call_instructions": 42242,
+    "max_acc_call_instructions": 9945
+  },
+  "one_channel": {
+    "instructions_12s": 9032748,
+    "equivalent_MIPS": 0.7527,
+    "8051_results": [
+      0,
+      72
+    ],
+    "host_results": [
+      0,
+      72
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66
+  },
+  "both_channels": {
+    "instructions_12s": 9074344,
+    "equivalent_MIPS": 0.7562,
+    "8051_results": [
+      0,
+      0
+    ],
+    "host_results": [
+      0,
+      0
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66
+  },
+  "same_frequency": {
+    "instructions_12s": 9093746,
+    "equivalent_MIPS": 0.7578,
+    "8051_results": [
+      0,
+      0
+    ],
+    "host_results": [
+      0,
+      0
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66
+  },
+  "spikes": {
+    "instructions_12s": 8894137,
+    "equivalent_MIPS": 0.7412,
+    "8051_results": [
+      0,
+      72
+    ],
+    "host_results": [
+      0,
+      72
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66
+  },
+  "flat": {
+    "instructions_12s": 8654815,
+    "equivalent_MIPS": 0.7212,
+    "8051_results": [
+      0,
+      0
+    ],
+    "host_results": [
+      0,
+      0
+    ],
+    "events": 741,
+    "state_bytes_sdcc": 171,
+    "sim_max_stack_address": 66
+  }
+}
