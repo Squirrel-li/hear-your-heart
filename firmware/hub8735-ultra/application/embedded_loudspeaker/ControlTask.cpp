@@ -606,7 +606,8 @@ void handleUiCommand(const UiCommandElement& cmd)
     switch (cmd.command) {
     case UiCommandType::SetMode:
         if (cmd.mode == PlayMode::Manual) {
-            if (automaticMode) enterManualMode();
+            // After standby playMode is kept with automaticMode off, so test the mode itself.
+            if (playMode != PlayMode::Manual) enterManualMode();
         } else if (automaticMode && cmd.mode == PlayMode::Enjoy && playMode != PlayMode::Demo) {
             setPlayMode(cmd.mode);  // Train -> Enjoy keeps the current song
         } else if (automaticMode && cmd.mode == PlayMode::Train && playMode == PlayMode::Train &&
@@ -667,7 +668,7 @@ void handleUiCommand(const UiCommandElement& cmd)
         enterStandby();
         break;
     case UiCommandType::RestartTrain:
-        if (!automaticMode || playMode != PlayMode::Train) break;
+        if (playMode != PlayMode::Train) break;  // also after standby: an explicit user restart
         trainRunning = false;  // enableAutomaticMode starts the plan over
         enableAutomaticMode(PlayMode::Train, trainPlan);
         break;
