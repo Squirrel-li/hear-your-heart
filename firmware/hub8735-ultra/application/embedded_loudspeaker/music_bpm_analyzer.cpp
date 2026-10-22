@@ -21,7 +21,7 @@ constexpr uint32_t MIDDLE_START_MIN_BYTES = 2u * 1024 * 1024;
 
 MusicBpmAnalyzer::MusicBpmAnalyzer()
     : decoder_(nullptr),
-      analyzer_(nullptr),
+      analyzerReady_(false),
       cursor_(encoded_),
       bytes_(0),
       eof_(false),
@@ -30,6 +30,9 @@ MusicBpmAnalyzer::MusicBpmAnalyzer()
       active_(false),
       decodeErrors_(0),
       startOffset_(0),
+      startMs_(0),
+      featureUs_(0),
+      pcmHash_(0),
       error_(nullptr)
 {
 }
@@ -104,6 +107,9 @@ bool MusicBpmAnalyzer::begin(AmebaFatFS& fs, const char* filename)
          oneThirdIn ? "one-third in" : (start > 0 ? "after ID3" : "file start"));
     decodeErrors_ = 0;
     startOffset_ = start;
+    startMs_ = millis();
+    featureUs_ = 0;
+    pcmHash_ = 2166136261u;
 
     cursor_ = encoded_;
     bytes_ = 0;
@@ -202,15 +208,17 @@ MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::step(uint16_t& bpm)
             continue;
         }
 
-        if (analyzer_ == nullptr) {
+        if (!analyzerReady_) {
             sampleRate_ = static_cast<uint32_t>(info.samprate);
-            analyzer_ = new (std::nothrow) breakfastquay::MiniBPM(
-                static_cast<float>(sampleRate_));
-            if (analyzer_ == nullptr) return fail("MiniBPM allocation failed");
+            if (!analyzer_.begin(sampleRate_, ANALYSIS_SECONDS)) {
+                LOGE(TAG, "tempo analyzer allocation failed (free heap %u)", static_cast<unsigned>(xPortGetFreeHeapSize()));
+                return fail("tempo analyzer allocation failed");
+            }
+            analyzerReady_ = true;
             LOGD(TAG, "first frame: %lu Hz, %d ch, %d kbps; analysing up to %lu s",
                  static_cast<unsigned long>(sampleRate_), info.nChans, info.bitrate / 1000,
                  static_cast<unsigned long>(ANALYSIS_SECONDS));
-            }
+        }
 
         const int sampleCount = info.outputSamps / info.nChans;
         for (int i = 0; i < sampleCount; ++i) {
@@ -218,9 +226,13 @@ MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::step(uint16_t& bpm)
             if (info.nChans == 2) {
                 sample = (sample + decoded_[i * 2 + 1]) / 2;
             }
+            const uint16_t u = static_cast<uint16_t>(sample);
+            pcmHash_ = ((pcmHash_ ^ (u & 0xff)) * 16777619u ^ (u >> 8)) * 16777619u;
             mono_[i] = sample / 32768.0f;
         }
-        analyzer_->process(mono_, sampleCount);
+        const uint32_t t0 = micros();
+        analyzer_.process(mono_, sampleCount);
+        featureUs_ += micros() - t0;
         frames_ += static_cast<uint32_t>(sampleCount);
         ++framesThisStep;
     }
@@ -234,23 +246,31 @@ MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::step(uint16_t& bpm)
 
 MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::finish(uint16_t& bpm)
 {
-    const double estimate = analyzer_ != nullptr &&
-                            sampleRate_ != 0 &&
-                            frames_ >= sampleRate_ * MIN_ANALYSIS_SECONDS
-        ? analyzer_->estimateTempo()
-        : 0.0;
-    LOGD(TAG, "finish: %lu frames = %lu s of audio, %lu decode errors, raw estimate=%d.%02d",
-         static_cast<unsigned long>(frames_), static_cast<unsigned long>(sampleRate_ != 0 ? frames_ / sampleRate_ : 0),
-         static_cast<unsigned long>(decodeErrors_), static_cast<int>(estimate),
-         static_cast<int>((estimate - static_cast<int>(estimate)) * 100));
-    if (analyzer_ != nullptr && estimate > 0.0) {
-        const std::vector<double> candidates = analyzer_->getTempoCandidates();
-        for (size_t i = 0; i < candidates.size() && i < 3; ++i) {
-            LOGD(TAG, "  candidate %u: %d.%02d BPM", static_cast<unsigned>(i + 1),
-                 static_cast<int>(candidates[i]), static_cast<int>((candidates[i] - static_cast<int>(candidates[i])) * 100));
-        }
+    // shortcut: 估計在這一次 step 內完成，期間 audioTask 不處理命令；若 timing log 的 estimate 超過約 1 秒再拆段。
+    const uint32_t estimateStartMs = millis();
+    float estimate = 0.0f;
+    int candidateCount = 0;
+    if (analyzerReady_ && sampleRate_ != 0 && frames_ >= sampleRate_ * MIN_ANALYSIS_SECONDS) {
+        bpm_tempo::Candidate* candidates = static_cast<bpm_tempo::Candidate*>(
+            malloc(sizeof(bpm_tempo::Candidate) * bpm_tempo::MAX_CANDIDATES));
+        if (candidates == nullptr) return fail("candidate buffer allocation failed");
+        candidateCount = analyzer_.analyze(candidates);
+        estimate = bpm_tempo::estimate(candidates, candidateCount);
+        free(candidates);
     }
-    if (!isfinite(estimate) || estimate < 30.0 || estimate > 300.0) {
+    const uint32_t nowMs = millis();
+    const uint32_t featureMs = featureUs_ / 1000;
+    const uint32_t totalMs = nowMs - startMs_;
+    const uint32_t estimateMs = nowMs - estimateStartMs;
+    LOGI(TAG, "timing: total %lu ms = decode+SD %lu + features %lu + estimate %lu; %lu s of audio, %d candidates, "
+              "estimate %d.%02d BPM, %lu decode errors, pcm %08lx/%lu",
+         static_cast<unsigned long>(totalMs), static_cast<unsigned long>(totalMs - featureMs - estimateMs),
+         static_cast<unsigned long>(featureMs), static_cast<unsigned long>(estimateMs),
+         static_cast<unsigned long>(sampleRate_ != 0 ? frames_ / sampleRate_ : 0), candidateCount,
+         static_cast<int>(estimate), static_cast<int>((estimate - static_cast<int>(estimate)) * 100),
+         static_cast<unsigned long>(decodeErrors_), static_cast<unsigned long>(pcmHash_),
+         static_cast<unsigned long>(frames_));
+    if (!isfinite(estimate) || estimate < 30.0f || estimate > 300.0f) {
         return fail("not enough audio or no BPM estimate");
     }
 
@@ -282,8 +302,8 @@ void MusicBpmAnalyzer::cancel()
 void MusicBpmAnalyzer::closeCurrentFile()
 {
     if (file_) file_.close();
-    delete analyzer_;
-    analyzer_ = nullptr;
+    analyzer_.release();
+    analyzerReady_ = false;
     cursor_ = encoded_;
     bytes_ = 0;
     eof_ = false;

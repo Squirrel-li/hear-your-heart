@@ -5,15 +5,7 @@
 
 #include "AmebaFatFS.h"
 #include "mp3dec.h"
-// Arduino.h defines min()/max() macros that break the C++ standard headers MiniBpm pulls in.
-#pragma push_macro("min")
-#pragma push_macro("max")
-#undef min
-#undef max
-#include <algorithm>
-#include <MiniBpm.h>
-#pragma pop_macro("max")
-#pragma pop_macro("min")
+#include "bpm_tempo.h"
 
 class MusicBpmAnalyzer {
 public:
@@ -36,7 +28,8 @@ private:
 
     File file_;
     HMP3Decoder decoder_;
-    breakfastquay::MiniBPM* analyzer_;
+    bpm_tempo::Analyzer analyzer_;
+    bool analyzerReady_;
     uint8_t encoded_[4096];
     int16_t decoded_[1152 * 2];
     float mono_[1152];
@@ -48,6 +41,9 @@ private:
     bool active_;
     uint32_t decodeErrors_;
     uint32_t startOffset_;
+    uint32_t startMs_;     // 計時 log：整首、特徵（STFT）與最後估計各花多少時間
+    uint32_t featureUs_;
+    uint32_t pcmHash_;     // FNV-1a over the mono int16 samples; compare with tools/bpm_tempo/dump.cpp -DDUMP_ESTIMATE
     const char* error_;
 };
 
