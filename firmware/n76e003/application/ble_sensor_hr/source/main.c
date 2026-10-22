@@ -48,6 +48,9 @@
 /*         [9] status  [10..19] SpO2 HR bpi hrv amp systole ppg1H ppg1L ppg2H ppg2L                        */
 /*         no length prefix (the BLE notify carries the length); fits the default 20 B notify payload    */
 /*         a new sample is sent after the previous one is ACKed; samples arriving meanwhile are dropped   */
+/*       + raw PPG: every RAW_N = 2 module frames one 18-byte 0x15 frame (ble-notify-data-format.md 4.1)  */
+/*         [0..3] time of the last sample  [4] 0x15  [5..8] sequence of the first sample  [9] status      */
+/*         [10..17] ppg1H ppg1L ppg2H ppg2L x 2; a batch that cannot be sent in time is dropped (seq gap)  */
 /*         (the hub sees the gap in sequence)                                                              */
 /*         error ACK -> peer unsubscribed -> back to step 5                                                */
 /*    7. Disconnect (S0 bit0 = 0) -> wait DISC_WAIT_MS -> step 2                                           */
@@ -551,6 +554,19 @@ static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len > 20 n
 
 __xdata UINT8 tx_pkt[PKT_LEN] = { 0, 0, 0, 0, SENSOR_PPG };
 
+/* Raw PPG batch (msgType 0x05). The ISR fills slot raw_slot (latched at the start of each module frame,  */
+/* 0xFF = not captured) and raw_n counts the finished slots. Only main resets raw_n, and only from RAW_N, */
+/* so a frame that started while the batch was full or being sent is never written into raw_pkt.         */
+#define SENSOR_PPG_RAW      (SENSOR_SRC | 0x05)
+#define RAW_N               2               /* samples per frame: 10 + 4 * RAW_N <= 20 B notify payload */
+#define RAW_LEN             (10 + 4 * RAW_N)
+#define RAW_ST              9
+#define RAW_DATA            10
+#define RAW_NONE            0xFF
+__xdata UINT8 raw_pkt[RAW_LEN] = { 0, 0, 0, 0, SENSOR_PPG_RAW };
+volatile __xdata UINT8 raw_n = 0;
+__xdata UINT8 raw_slot = RAW_NONE;
+
 /* The UART0 ISR writes tx_pkt only while ppg_ready = 0; main sends tx_pkt   */
 /* and then clears ppg_ready. ppg_cap is latched at the start of each module */
 /* frame, so a frame is either captured completely or not at all.            */
@@ -593,6 +609,7 @@ void SerialPort0_ISR(void) __interrupt (4)
                 ppg_sum = 0xB0;
                 ppg_cap = !ppg_ready;
                 hr_cap  = !hr_new;
+                raw_slot = (raw_n < RAW_N) ? raw_n : RAW_NONE;
                 ppg_i   = 2;
             }
             else if (c != 0x55)
@@ -605,6 +622,11 @@ void SerialPort0_ISR(void) __interrupt (4)
             ppg_sum += c;
             if (ppg_cap) tx_pkt[PKT_ST - 2 + ppg_i] = (ppg_i == 4) ? hr_bpm : c;   /* D3 -> own heart rate */
             if (hr_cap && ppg_i >= 9) hr_raw[ppg_i - 9] = c;
+            if (raw_slot != RAW_NONE)       /* a frame that fails the checksum is overwritten by the next one */
+            {
+                if (ppg_i >= 9) raw_pkt[RAW_DATA + (raw_slot << 2) + ppg_i - 9] = c;
+                else if (ppg_i == 2 && raw_slot == RAW_N - 1) raw_pkt[RAW_ST] = c;
+            }
             ppg_i++;
         }
         else if (ppg_i == 13)               /* checksum */
@@ -633,6 +655,24 @@ void SerialPort0_ISR(void) __interrupt (4)
                     tx_pkt[PKT_SEQ + 2] = ppg_seq[2];
                     tx_pkt[PKT_SEQ + 3] = ppg_seq[3];
                     ppg_ready = 1;
+                }
+                if (raw_slot != RAW_NONE)
+                {
+                    if (raw_slot == 0)
+                    {
+                        raw_pkt[PKT_SEQ + 0] = ppg_seq[0];
+                        raw_pkt[PKT_SEQ + 1] = ppg_seq[1];
+                        raw_pkt[PKT_SEQ + 2] = ppg_seq[2];
+                        raw_pkt[PKT_SEQ + 3] = ppg_seq[3];
+                    }
+                    if (raw_slot == RAW_N - 1)
+                    {
+                        raw_pkt[PKT_TS + 0] = (UINT8)(g_ms_hi >> 8);
+                        raw_pkt[PKT_TS + 1] = (UINT8)g_ms_hi;
+                        raw_pkt[PKT_TS + 2] = (UINT8)(g_ms >> 8);
+                        raw_pkt[PKT_TS + 3] = (UINT8)g_ms;
+                    }
+                    raw_n = raw_slot + 1;
                 }
                 if (++ppg_seq[3] == 0)
                     if (++ppg_seq[2] == 0)
@@ -750,6 +790,12 @@ static void hr_task(UINT16 t)
         hr_reset(&hr);
         hr_bpm = 0;
     }
+}
+
+static void raw_send(void)
+{
+    bm_notify_send(raw_pkt, RAW_LEN);       /* blocking: raw_pkt is fully sent on return */
+    raw_n = 0;
 }
 
 static void ppg_send(void)
@@ -983,7 +1029,7 @@ static UINT32 uptime_ms(void)
 }
 
 /*============================== LSM6DS3 (I2C0, shared with the OLED) ======*/
-/* Read once per IMU_PERIOD_MS, sent as an Acc frame and a Gyro frame (ble-notify-data-format.md */
+/* Read once per IMU_PERIOD_MS, sent as one acc+gyro frame (msgType 0x12, ble-notify-data-format.md */
 /* section 5) and shown on the IMU page. Accel +-8 g, gyro +-1000 dps, both ODR 12.5 Hz.          */
 #define IMU_ADDR            0xD6            /* 8-bit address, SA0 = VCC (7-bit 0x6B) */
 #define IMU_PERIOD_MS       1000            /* 1 Hz */
@@ -1334,6 +1380,7 @@ void main(void)
         /* not streaming: drop the sample so the first frame after subscription is fresh */
         if (state != ST_WAIT_NOTIFY && state != ST_NOTIFY) ppg_ready = 0;
         if (state != ST_NOTIFY) imu_ready = 0;      /* the probe is always a PPG frame */
+        if (state != ST_NOTIFY && raw_n == RAW_N) raw_n = 0;   /* not streaming: keep the batch fresh */
 
         imu_task();                                 /* also runs without a BLE link: feeds the OLED */
 
@@ -1496,6 +1543,7 @@ void main(void)
 #endif
             cmd_state = CMD_IDLE;
             if (imu_ready) imu_send();              /* 1 Hz, hr_send stays set until the next PPG frame goes out */
+            else if (raw_n == RAW_N) raw_send();    /* about every 56 ms */
             else if (ppg_ready)
             {
                 if (hr_send)                        /* one frame per finished HR cycle (about every 10 s) */
@@ -1505,7 +1553,7 @@ void main(void)
                 }
                 else
                 {
-                    ppg_ready = 0;                  /* raw samples are not uploaded; keep the next one fresh */
+                    ppg_ready = 0;                  /* raw samples go out as 0x15 batches; keep the next one fresh */
                 }
             }
             break;

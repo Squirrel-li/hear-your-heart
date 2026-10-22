@@ -40,8 +40,8 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro，與hub `BLETask.cpp` 一致）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
-| `payload`          | —     | 依 msgType 決定（第 4–6 節）                               |
+| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro、`0x05` PPG 原始批次，與hub `BLETask.cpp` 一致）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
+| `payload`          | —     | 依 msgType 決定（第 4–6、4.1 節）                             |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
 
@@ -52,6 +52,7 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 | `0x02` | Acc+Gyro（LSM6DS3） | 16B     | 21B        | sensor → hub：FFF1（`ble_sensor`、`ble_sensor_hr` 使用，需 MTU ≥ 24） |
 | `0x03` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
 | `0x04` | Gyro（LSM6DS3）     | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
+| `0x05` | PPG 原始批次        | 5+4N B  | 10+4N B    | sensor → hub：FFF1（`ble_sensor_hr` 每 N=2 筆送一次，18B；第 4.1 節） |
 
 ## 4. Payload：PPG（0x01，15B）→ `PpgSensorElement`
 
@@ -69,6 +70,22 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 | 13   | `ppg2`            | uint16 |                                           |
 
 偏移 4–14 原樣對應 PPG 模組 frame 的 `ST, D0..D9`。
+
+## 4.1 Payload：PPG 原始批次（0x05，5+4N B）
+
+一個 frame 帶 N 筆連續的 `ppg1`／`ppg2` 原始值，供 hub 自行分析心率。N 不另設欄位，由長度決定：`N = (frame 長度 − 10) / 4`，N ≥ 1。
+長度不符（`(len − 10) % 4 ≠ 0` 或 N = 0）時 hub 丟棄整個 frame。
+
+| 偏移 | 欄位                | 型別        | 說明                                                       |
+| ---- | ------------------- | ----------- | ---------------------------------------------------------- |
+| 0    | `sequence`        | uint32      | **第一筆**樣本的 PPG 樣本計數（以樣本計，不是以 frame 計） |
+| 4    | `status`          | uint8       | 本批**最後一筆**的模組 `ST`（0 finger off、1 finger on、2 get data） |
+| 5    | `ppg1` / `ppg2` ×N | uint16 ×2N | 依取樣先後排列，每筆 4B：ppg1 後接 ppg2                    |
+
+- `sensor_time_ms` 是**最後一筆**樣本收完的時刻。模組約每 28 ms 輸出一筆，第 i 筆（0 起）約為 `sensor_time_ms − (N−1−i) × 28`；實際間隔以錄製資料為準。
+- 漏樣判斷：下一個 0x05 frame 的 `sequence` 應等於本 frame 的 `sequence + N`；不相等表示中間有樣本沒送出（sensor 忙碌或未訂閱時丟棄）。
+- 與 0x01 共用同一個 PPG 樣本計數，因此兩種 frame 的 `sequence` 可以互相對照。
+- 預設 MTU（20B）時 N = 2；調大 MTU 可直接增加 N，hub 依長度解析，不需改格式。
 
 ## 5. Payload：Acc（0x03，10B）→ `AccElement`、Gyro（0x04，10B）→ `GyroElement`、Acc+Gyro（0x02，16B）
 
@@ -127,7 +144,7 @@ hub → sensor 寫入 FFF2，**不套用 Frame**（不帶 `sensor_time_ms` 與 `
 
 ## 7. MTU
 
-- 預設 ATT MTU 為 23，一個 notify 最多帶 20B：PPG（20B）、Acc／Gyro（各 15B）都放得下，不需要調大 MTU。
+- 預設 ATT MTU 為 23，一個 notify 最多帶 20B：PPG（20B）、Acc／Gyro（各 15B）、N=2 的 PPG 原始批次（18B）都放得下，不需要調大 MTU。
 - Acc 與 Gyro 拆成兩個 frame，就是為了不超過預設 MTU。
 
 ## 8. 待定
