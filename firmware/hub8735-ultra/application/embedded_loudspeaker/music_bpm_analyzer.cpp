@@ -17,6 +17,7 @@ constexpr unsigned FRAMES_PER_STEP = 8;
 constexpr unsigned MAX_OPERATIONS_PER_STEP = 64;
 constexpr uint32_t MAX_DECODE_ERRORS = 200;  // ~5 s of frames; beyond this the file is not usable
 constexpr uint32_t MIDDLE_START_MIN_BYTES = 2u * 1024 * 1024;
+constexpr uint32_t WARMUP_FRAMES = 3;  // must match tools/bpm_tempo/dump.cpp
 }
 
 MusicBpmAnalyzer::MusicBpmAnalyzer()
@@ -32,6 +33,7 @@ MusicBpmAnalyzer::MusicBpmAnalyzer()
       startOffset_(0),
       startMs_(0),
       featureUs_(0),
+      warmupFrames_(0),
       pcmHash_(0),
       error_(nullptr)
 {
@@ -109,6 +111,7 @@ bool MusicBpmAnalyzer::begin(AmebaFatFS& fs, const char* filename)
     startOffset_ = start;
     startMs_ = millis();
     featureUs_ = 0;
+    warmupFrames_ = 0;
     pcmHash_ = 2166136261u;
 
     cursor_ = encoded_;
@@ -207,6 +210,10 @@ MusicBpmAnalyzer::StepResult MusicBpmAnalyzer::step(uint16_t& bpm)
             }
             continue;
         }
+
+        // Bit reservoir, IMDCT overlap and polyphase history come from the previous file (or the
+        // genre pass) until about 2 frames in; drop 3 so the result does not depend on scan order.
+        if (++warmupFrames_ <= WARMUP_FRAMES) continue;
 
         if (!analyzerReady_) {
             sampleRate_ = static_cast<uint32_t>(info.samprate);

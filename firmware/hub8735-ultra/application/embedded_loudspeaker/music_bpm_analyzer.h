@@ -43,7 +43,8 @@ private:
     uint32_t startOffset_;
     uint32_t startMs_;     // 計時 log：整首、特徵（STFT）與最後估計各花多少時間
     uint32_t featureUs_;
-    uint32_t pcmHash_;     // FNV-1a over the mono int16 samples; compare with tools/bpm_tempo/dump.cpp -DDUMP_ESTIMATE
+    uint32_t warmupFrames_;  // first decoded frames still carry the shared decoder's state from the previous file
+    uint32_t pcmHash_;    // FNV-1a over the mono int16 samples; compare with tools/bpm_tempo/dump.cpp -DDUMP_ESTIMATE
     const char* error_;
 };
 
