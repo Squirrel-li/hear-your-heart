@@ -1,0 +1,313 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="draw.io">
+  <diagram id="overview" name="系統資料流程圖">
+    <mxGraphModel page="1" pageWidth="1500" pageHeight="800" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="watch" value="手錶" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#fafcfd;verticalAlign=top;align=left;spacingTop=12;spacingLeft=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="15" y="20" width="395" height="450" />
+        </mxCell>
+        <mxCell id="hub" value="HUB8735 Ultra" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#fafcfd;verticalAlign=top;align=left;spacingTop=12;spacingLeft=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="445" y="20" width="1035" height="715" />
+        </mxCell>
+        <mxCell id="ext" value="外部綁帶（示意）" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#fafcfd;verticalAlign=top;align=left;spacingTop=12;spacingLeft=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="15" y="510" width="395" height="225" />
+        </mxCell>
+        <mxCell id="ppg" value="PPG 模組&lt;br&gt;BMH08002-4" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="35" y="90" width="165" height="65" />
+        </mxCell>
+        <mxCell id="imu" value="IMU&lt;br&gt;LSM6DS3" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="225" y="90" width="165" height="65" />
+        </mxCell>
+        <mxCell id="calc" value="N76E003&lt;br&gt;心率計算／封包組成" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="80" y="235" width="270" height="80" />
+        </mxCell>
+        <mxCell id="bm" value="BLE 模組&lt;br&gt;BM7701" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="220" y="380" width="165" height="65" />
+        </mxCell>
+        <mxCell id="wui" value="OLED／按鍵" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="35" y="380" width="150" height="65" />
+        </mxCell>
+        <mxCell id="max" value="MAX30102" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="35" y="585" width="145" height="65" />
+        </mxCell>
+        <mxCell id="epy" value="ePy Lite&lt;br&gt;心率／BLE" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="225" y="585" width="165" height="65" />
+        </mxCell>
+        <mxCell id="local" value="本地 PPG／IMU&lt;br&gt;BMH08002-4／LSM6DS3" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="475" y="100" width="265" height="75" />
+        </mxCell>
+        <mxCell id="user" value="使用者&lt;br&gt;OLED／按鍵" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="830" y="100" width="215" height="75" />
+        </mxCell>
+        <mxCell id="analysis" value="感測分析&lt;br&gt;心率 → Zone → 目標 BPM&lt;br&gt;加速度 → 運動強度" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="475" y="350" width="265" height="90" />
+        </mxCell>
+        <mxCell id="ctl" value="控制&lt;br&gt;選曲、模式、手動優先" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="830" y="350" width="215" height="90" />
+        </mxCell>
+        <mxCell id="play" value="播放&lt;br&gt;播放 MP3" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1160" y="350" width="255" height="90" />
+        </mxCell>
+        <mxCell id="speaker" value="MAX98357／喇叭" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=0;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1160" y="500" width="255" height="60" />
+        </mxCell>
+        <mxCell id="music" value="曲目分析&lt;br&gt;BPM（MiniBPM）&lt;br&gt;曲風（YAMNet）" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;rounded=1;arcSize=25;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="600" y="605" width="220" height="95" />
+        </mxCell>
+        <mxCell id="lib" value="音樂資料（SD 卡）&lt;br&gt;MP3／檔名／BPM／曲風" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;shape=cylinder3;size=12;fillColor=#fff9e9;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="960" y="605" width="280" height="95" />
+        </mxCell>
+        <mxCell id="e1" value="UART／PPG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0.5;exitY=1;entryX=0.2;entryY=0;" edge="1" parent="1" source="ppg" target="calc">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e2" value="I²C／IMU" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0.5;exitY=1;entryX=0.8;entryY=0;" edge="1" parent="1" source="imu" target="calc">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e3" value="UART 封包" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0.8;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="calc" target="bm">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e4" value="顯示／操作" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;startArrow=block;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="calc" target="wui">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e5" value="PPG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;" edge="1" parent="1" source="max" target="epy">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e6" value="BLE&lt;br&gt;PPG／IMU" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.65;" edge="1" parent="1" source="bm" target="analysis">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e7" value="BLE／心率" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.9;" edge="1" parent="1" source="epy" target="analysis">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="430" y="617" />
+              <mxPoint x="430" y="431" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="PPG／ACC／GYRO" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;" edge="1" parent="1" source="local" target="analysis">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e9" value="目標 BPM&lt;br&gt;運動強度" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;" edge="1" parent="1" source="analysis" target="ctl">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e10" value="操作指令" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;" edge="1" parent="1" source="user" target="ctl">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e11" value="播放命令" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="ctl" target="play">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e12" value="播畢／失敗" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0;exitY=0.8;entryX=1;entryY=0.8;" edge="1" parent="1" source="play" target="ctl">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e13" value="音訊／I²S" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;" edge="1" parent="1" source="play" target="speaker">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e14" value="分析請求" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ctl" target="music">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="873" y="535" />
+              <mxPoint x="710" y="535" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="曲目／BPM" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0.15;exitY=0;entryX=0.8;entryY=1;" edge="1" parent="1" source="lib" target="ctl">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e16" value="音檔／既有紀錄" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=0;exitY=0.3;entryX=1;entryY=0.3;" edge="1" parent="1" source="lib" target="music">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e17" value="BPM／曲風" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=1;exitY=0.8;entryX=0;entryY=0.8;" edge="1" parent="1" source="music" target="lib">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e18" value="MP3 音檔" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontFamily=Microsoft JhengHei;fontSize=16;labelBackgroundColor=#ffffff;strokeColor=#536b7a;endArrow=block;exitX=1;exitY=0.7;entryX=1;entryY=0.8;" edge="1" parent="1" source="lib" target="play">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1445" y="671" />
+              <mxPoint x="1445" y="422" />
+            </Array>
+            <mxPoint as="offset" x="-55" y="0" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="note" value="方框：硬體／操作介面　圓角框：處理流程　圓柱：資料儲存　外框：硬體歸屬&lt;br&gt;PPG／IMU 分別選擇本地、手錶或綁帶來源；曲目分析於停止播放時執行，曲風目前僅儲存。" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=20;fontColor=#263746;strokeColor=#758a97;strokeWidth=1.3;strokeColor=none;fillColor=none;align=left;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="755" width="1460" height="55" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="system" name="詳細資料流（備查）">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="穿戴感測與音樂播放｜系統架構與資料路徑" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;strokeColor=none;fontSize=28;fontStyle=1;align=left;fillColor=#ffffff;strokeColor=#94a3b8;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="30" y="15" width="1530" height="45" />
+        </mxCell>
+        <mxCell id="watch" value="手錶｜N76E003 韌體" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;verticalAlign=top;align=left;spacingTop=14;spacingLeft=16;fontStyle=1;fontSize=21;fillColor=#eff6ff;strokeColor=#94a3b8;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="30" y="80" width="440" height="480" />
+        </mxCell>
+        <mxCell id="ext" value="外部綁帶｜僅示意輸入" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;verticalAlign=top;align=left;spacingTop=14;spacingLeft=16;fontStyle=1;fontSize=21;fillColor=#f8fafc;strokeColor=#94a3b8;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="30" y="590" width="440" height="170" />
+        </mxCell>
+        <mxCell id="hub" value="HUB8735 Ultra｜FreeRTOS 韌體與 NPU" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;verticalAlign=top;align=left;spacingTop=14;spacingLeft=16;fontStyle=1;fontSize=21;fillColor=#f0fdfa;strokeColor=#94a3b8;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="510" y="80" width="1050" height="980" />
+        </mxCell>
+        <mxCell id="ppg" value="BMH08002-4&lt;br&gt;光學 PPG" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="55" y="145" width="175" height="65" />
+        </mxCell>
+        <mxCell id="imu" value="LSM6DS3&lt;br&gt;加速度／陀螺儀" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="260" y="145" width="180" height="65" />
+        </mxCell>
+        <mxCell id="n76" value="N76E003&lt;br&gt;PPG 前處理 → 脈搏間隔 → 心率&lt;br&gt;感測封包組成" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#dbeafe;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="90" y="265" width="320" height="95" />
+        </mxCell>
+        <mxCell id="wb" value="BM7701&lt;br&gt;BLE 傳輸" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="265" y="425" width="170" height="75" />
+        </mxCell>
+        <mxCell id="wui" value="SH1106／按鍵&lt;br&gt;手錶顯示與操作" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="55" y="425" width="175" height="75" />
+        </mxCell>
+        <mxCell id="max" value="MAX30102&lt;br&gt;光學感測" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="55" y="650" width="170" height="65" />
+        </mxCell>
+        <mxCell id="epy" value="ePy Lite&lt;br&gt;資料處理／BLE" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="265" y="650" width="170" height="65" />
+        </mxCell>
+        <mxCell id="ble" value="BLETask&lt;br&gt;接收／解析／來源篩選" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ccfbf1;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="550" y="430" width="245" height="80" />
+        </mxCell>
+        <mxCell id="local" value="本地感測器&lt;br&gt;BMH08002-4（UART）&lt;br&gt;LSM6DS3（I²C）" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="550" y="155" width="245" height="100" />
+        </mxCell>
+        <mxCell id="analysis" value="analysisTask&lt;br&gt;本地讀取／感測資料處理&lt;br&gt;心率 → Zone → 目標 BPM&lt;br&gt;動態加速度 → Demo 強度" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ccfbf1;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="850" y="260" width="275" height="120" />
+        </mxCell>
+        <mxCell id="control" value="controlTask&lt;br&gt;Enjoy：心率目標 BPM&lt;br&gt;Train：課表 Zone／計時&lt;br&gt;Demo／Manual／手動優先" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ccfbf1;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="850" y="470" width="275" height="130" />
+        </mxCell>
+        <mxCell id="ui" value="UITask&lt;br&gt;選單／狀態顯示" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ccfbf1;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1230" y="260" width="285" height="80" />
+        </mxCell>
+        <mxCell id="screen" value="SH1106 OLED＋按鍵&lt;br&gt;I²C／GPIO" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1230" y="155" width="285" height="65" />
+        </mxCell>
+        <mxCell id="lib" value="曲庫資料&lt;br&gt;music_library.json&lt;br&gt;檔名／BPM／曲風／檔案資訊" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;shape=cylinder3;boundedLbl=1;size=15;fillColor=#fef3c7;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1230" y="470" width="285" height="105" />
+        </mxCell>
+        <mxCell id="audio" value="audioTask&lt;br&gt;SD 存取／MP3 解碼／播放&lt;br&gt;分析排程與結果存檔" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ccfbf1;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="850" y="715" width="275" height="100" />
+        </mxCell>
+        <mxCell id="scan" value="曲目分析（停止播放時）&lt;br&gt;MiniBPM：歌曲 BPM&lt;br&gt;SDK YAMNet：NPU 曲風分析" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ede9fe;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1230" y="715" width="285" height="100" />
+        </mxCell>
+        <mxCell id="sd" value="SD 卡&lt;br&gt;MP3／Demo 音檔／曲庫" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;shape=cylinder3;boundedLbl=1;size=15;fillColor=#fef3c7;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="550" y="730" width="245" height="80" />
+        </mxCell>
+        <mxCell id="amp" value="MAX98357&lt;br&gt;I²S 數位音訊功率放大" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="850" y="905" width="275" height="75" />
+        </mxCell>
+        <mxCell id="speaker" value="喇叭&lt;br&gt;音樂輸出" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;rounded=1;fillColor=#ffffff;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1230" y="905" width="285" height="75" />
+        </mxCell>
+        <mxCell id="e1" value="UART／PPG" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.5;exitY=1;entryX=0.25;entryY=0;" edge="1" parent="1" source="ppg" target="n76">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e2" value="I²C／IMU" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.5;exitY=1;entryX=0.8;entryY=0;" edge="1" parent="1" source="imu" target="n76">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e3" value="UART／封包" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.8;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="n76" target="wb">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e4" value="顯示／按鍵" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;startArrow=block;startFill=1;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="n76" target="wui">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e5" value="I²C" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;" edge="1" parent="1" source="max" target="epy">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e6" value="BLE&lt;br&gt;Notify" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;strokeColor=#2563eb;strokeWidth=2;" edge="1" parent="1" source="wb" target="ble">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e7" value="BLE" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;strokeColor=#2563eb;dashed=1;exitX=1;exitY=0.5;entryX=0.2;entryY=1;" edge="1" parent="1" source="epy" target="ble">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="490" y="682" />
+              <mxPoint x="490" y="550" />
+              <mxPoint x="599" y="550" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="本地資料" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=1;exitY=0.5;entryX=0;entryY=0.25;" edge="1" parent="1" source="local" target="analysis">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="820" y="205" />
+              <mxPoint x="820" y="290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="PPG／IMU" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=1;exitY=0.5;entryX=0;entryY=0.8;" edge="1" parent="1" source="ble" target="analysis">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="820" y="470" />
+              <mxPoint x="820" y="356" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="目標 BPM&lt;br&gt;Demo 強度" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="analysis" target="control">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e11" value="操作／顯示" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;startArrow=block;startFill=1;" edge="1" parent="1" source="screen" target="ui">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e12" value="操作指令" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0;exitY=0.5;entryX=1;entryY=0.2;" edge="1" parent="1" source="ui" target="control">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1180" y="300" />
+              <mxPoint x="1180" y="496" />
+            </Array>
+            <mxPoint as="offset" x="-22" y="-28" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="感測值" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;dashed=1;exitX=1;exitY=0.2;entryX=0;entryY=0.2;" edge="1" parent="1" source="analysis" target="ui">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e14" value="模式／進度" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;dashed=1;exitX=1;exitY=0.45;entryX=0.5;entryY=1;" edge="1" parent="1" source="control" target="ui">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1200" y="528" />
+              <mxPoint x="1200" y="400" />
+              <mxPoint x="1372" y="400" />
+            </Array>
+            <mxPoint as="offset" x="80" y="20" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="曲目／BPM" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0;exitY=0.8;entryX=1;entryY=0.8;" edge="1" parent="1" source="lib" target="control">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e16" value="播放／&lt;br&gt;分析請求" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.4;exitY=1;entryX=0.4;entryY=0;" edge="1" parent="1" source="control" target="audio">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e17" value="播畢／失敗" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;dashed=1;exitX=0.85;exitY=0;entryX=0.85;entryY=1;" edge="1" parent="1" source="audio" target="control">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e18" value="音檔／&lt;br&gt;曲庫讀寫" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;startArrow=block;startFill=1;" edge="1" parent="1" source="sd" target="audio">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e19" value="音訊／&lt;br&gt;分析結果" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;startArrow=block;startFill=1;" edge="1" parent="1" source="audio" target="scan">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e20" value="BPM／曲風" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="scan" target="lib">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e21" value="PCM／I²S" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;" edge="1" parent="1" source="audio" target="amp">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e22" value="音訊" style="whiteSpace=nowrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeColor=#64748b;labelBackgroundColor=#ffffff;fontSize=14;" edge="1" parent="1" source="amp" target="speaker">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="note" value="圖例：外框＝硬體邊界；彩色圓角框＝軟體流程；圓柱＝資料儲存。&lt;br&gt;PPG 與 IMU 可分別選本地／手錶／綁帶；綁帶僅畫指定硬體概念，不宣稱提供 IMU。&lt;br&gt;曲庫曲風目前僅記錄；自訓 YAMNet 的訓練成果另見本文，圖中標示現行 SDK 推論流程。&lt;br&gt;為保持可讀性，省略各模組到 UITask 的部分狀態回報及來源設定控制線。" style="whiteSpace=wrap;html=1;fontFamily=Microsoft JhengHei;fontSize=17;fontColor=#1f2937;strokeWidth=1.5;strokeColor=none;align=left;fontSize=17;fillColor=#ffffff;strokeColor=#94a3b8;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="30" y="1090" width="1530" height="95" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
