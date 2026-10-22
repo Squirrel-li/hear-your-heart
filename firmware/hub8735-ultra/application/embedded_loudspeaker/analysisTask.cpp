@@ -119,7 +119,13 @@ void analysisTask(void* parameter)
     ppg_raw_hr_reset(rawHr);
     uint8_t rawBpm = 0;
     uint32_t rawBpmMs = 0;
-    localSensorInit();  // 預設來源是胸帶，本地感測器保持關閉
+    localSensorInit();  // 本地感測器先全部關閉，再只開預設選為 Local 的來源
+    if (activePpgSource == SensorSource::Local && !localPpgSetEnabled(true)) {
+        LOGE("ANALYSIS", "default local PPG init failed");
+    }
+    if (activeImuSource == SensorSource::Local && !localImuSetEnabled(true)) {
+        LOGE("ANALYSIS", "default local IMU init failed");
+    }
 
     for (;;) {
         AnalysisCmdElement cmd{};

@@ -28,8 +28,8 @@ QueueHandle_t bleTxQueue = nullptr;
 QueueHandle_t uiCmdQueue = nullptr;
 QueueHandle_t analysisCmdQueue = nullptr;
 QueueHandle_t bleCmdQueue = nullptr;
-volatile SensorSource activePpgSource = SensorSource::Chest;
-volatile SensorSource activeImuSource = SensorSource::Chest;
+volatile SensorSource activePpgSource = SensorSource::Watch;
+volatile SensorSource activeImuSource = SensorSource::Local;
 
 UserInfo userInfo;
 volatile bool musicLibraryReady = false;
