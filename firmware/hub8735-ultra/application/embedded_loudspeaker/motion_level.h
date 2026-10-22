@@ -5,21 +5,22 @@
 #include <stdint.h>
 
 // 運動強度：LSM6DS3 ±8 g、加速度計已用高通去掉重力，所以三軸合力 ≈ 動態加速度。
-// 每秒取該秒樣本的平均合力，再取最近 MOTION_WINDOW_S 秒平均分級；
-// 新等級需連續維持 MOTION_DWELL_MS 才確認。1 Hz（BLE）與 12.5 Hz（本地）來源都適用。
+// 每 MOTION_BUCKET_MS 取該段樣本的平均合力，再取最近 MOTION_WINDOW_BUCKETS 段平均分級；
+// 新等級需連續維持 MOTION_DWELL_MS 才確認（單段突波不切換）。1 Hz（BLE）與 12.5 Hz（本地）來源都適用。
 // shortcut: thresholds are estimates for a body-worn sensor; recalibrate from the logged mean mg.
 constexpr uint8_t MOTION_LEVELS = 5;  // 0 靜止, 1 走路, 2 快走, 3 跑步, 4 跳躍
 constexpr uint16_t MOTION_LEVEL_MG[MOTION_LEVELS - 1] = {50, 250, 600, 1200};
 constexpr float ACC_MG_PER_LSB = 0.244f;
-constexpr uint8_t MOTION_WINDOW_S = 2;
-constexpr uint32_t MOTION_DWELL_MS = 3000;
+constexpr uint32_t MOTION_BUCKET_MS = 500;
+constexpr uint8_t MOTION_WINDOW_BUCKETS = 1;
+constexpr uint32_t MOTION_DWELL_MS = 500;
 constexpr uint8_t MOTION_LEVEL_NONE = 0xFF;
 
 struct MotionLevelState {
     float bucketSum = 0.0f;
     uint16_t bucketCount = 0;
     uint32_t bucketStartMs = 0;
-    float window[MOTION_WINDOW_S] = {};
+    float window[MOTION_WINDOW_BUCKETS] = {};
     uint8_t windowCount = 0;
     uint8_t windowIdx = 0;
     uint8_t active = MOTION_LEVEL_NONE;
@@ -52,16 +53,16 @@ inline uint8_t motion_level_for(float meanMg)
     return level;
 }
 
-// Call often; evaluates once per second. Returns the newly confirmed level, or -1 if unchanged.
+// Call often; evaluates once per MOTION_BUCKET_MS. Returns the newly confirmed level, or -1 if unchanged.
 inline int motion_level_update(MotionLevelState& s, uint32_t nowMs)
 {
-    if ((uint32_t)(nowMs - s.bucketStartMs) < 1000u) return -1;
+    if ((uint32_t)(nowMs - s.bucketStartMs) < MOTION_BUCKET_MS) return -1;
     s.bucketStartMs = nowMs;
-    if (s.bucketCount == 0) return -1;  // no samples this second
+    if (s.bucketCount == 0) return -1;  // no samples in this bucket
 
     s.window[s.windowIdx] = s.bucketSum / s.bucketCount;
-    s.windowIdx = (uint8_t)((s.windowIdx + 1) % MOTION_WINDOW_S);
-    if (s.windowCount < MOTION_WINDOW_S) ++s.windowCount;
+    s.windowIdx = (uint8_t)((s.windowIdx + 1) % MOTION_WINDOW_BUCKETS);
+    if (s.windowCount < MOTION_WINDOW_BUCKETS) ++s.windowCount;
     s.bucketSum = 0.0f;
     s.bucketCount = 0;
 

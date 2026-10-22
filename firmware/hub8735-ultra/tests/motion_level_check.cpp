@@ -5,13 +5,13 @@
 
 #include "motion_level.h"
 
-// One sample per second of the given dynamic magnitude (mg, on x only); returns the last update result.
-static int feed(MotionLevelState& s, uint32_t& t, float mg, int seconds)
+// One sample per bucket of the given dynamic magnitude (mg, on x only); returns the last update result.
+static int feed(MotionLevelState& s, uint32_t& t, float mg, int buckets)
 {
     int last = -1;
-    for (int i = 0; i < seconds; ++i) {
+    for (int i = 0; i < buckets; ++i) {
         motion_level_add(s, (int16_t)(mg / ACC_MG_PER_LSB), 0, 0);
-        t += 1000;
+        t += MOTION_BUCKET_MS;
         const int r = motion_level_update(s, t);
         if (r >= 0) last = r;
     }
@@ -31,14 +31,14 @@ int main()
     assert(feed(s, t, 10, 1) == 0);  // first level is accepted at once
     assert(s.active == 0);
 
-    // A 1 s spike averages with the window and needs the dwell: no change.
+    // A single-bucket (0.5 s) spike needs the dwell: no change.
     assert(feed(s, t, 2000, 1) == -1);
     assert(feed(s, t, 10, 3) == -1);
     assert(s.active == 0);
 
-    // Sustained running (~800 mg) is confirmed after the dwell.
-    assert(feed(s, t, 800, 2) == -1);
-    assert(feed(s, t, 800, 4) == 3);
+    // Sustained running (~800 mg) is confirmed after the 0.5 s dwell.
+    assert(feed(s, t, 800, 1) == -1);
+    assert(feed(s, t, 800, 1) == 3);
     assert(s.active == 3);
 
     // No samples: level kept.
@@ -50,9 +50,9 @@ int main()
     motion_level_reset_samples(s);
     assert(s.active == 3 && s.windowCount == 0);
 
-    // 12.5 Hz samples in one second average into one bucket.
-    for (int i = 0; i < 12; ++i) motion_level_add(s, (int16_t)(1500 / ACC_MG_PER_LSB), 0, 0);
-    t += 1000;
+    // 12.5 Hz samples in one 0.5 s bucket average together.
+    for (int i = 0; i < 6; ++i) motion_level_add(s, (int16_t)(1500 / ACC_MG_PER_LSB), 0, 0);
+    t += MOTION_BUCKET_MS;
     motion_level_update(s, t);
     assert(s.lastMeanMg > 1490 && s.lastMeanMg < 1510);
 
