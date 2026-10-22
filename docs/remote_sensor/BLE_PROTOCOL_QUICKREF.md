@@ -1,5 +1,7 @@
 # 感測端 BLE 介面
 
+> 2026-10-18 核對：以下速查尚有舊版敘述：目前 HUB 先探索 FFF0／FFF1／FFF2，失敗再試下列 128-bit 服務；Auto 連上後失聯會轉 Manual，不是無條件重連。msgType 高 4 bit 是來源（Chest=0、Watch=1），手錶實際為 0x11／0x12。 現況見[架構核對](../ARCHITECTURE.md)。
+
 更新：2026-10-11
 
 ## GATT

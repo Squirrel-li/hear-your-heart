@@ -1,6 +1,10 @@
 # 聽見你的心（Hear Your Heart）
 
-專案以 BM7701-00-1 感測端與 HUB 8735 Ultra 嵌入式揚聲器為核心，播放時依心率更新目標 BPM，供自動選曲使用。產品手機 App 暫不納入目前範圍；apps/remote_sensor_simulator 是感測器測試工具。
+系統分為三種裝置：**HUB8735 Ultra 運算播放端、N76E003 穿戴手錶、外部穿戴綁帶**。本專案實作 HUB 與手錶；綁帶由其他人實作，本專案保留 HUB 接收與整合。BM7701 是手錶的 BLE 傳輸模組。
+
+目前 HUB 提供 Enjoy 心率選曲、Train 課表、Manual 手動播放、Demo 運動強度播放，以及 OLED 操作、雙 BLE 連線、曲庫分析與軟體待機。主程式已接入 BPM／NPU 曲風分析，曲風存入 JSON；有有效 BPM 即可自動選曲。未來可新增使用者的「期望曲風」選項。自動偵測新檔與播放中延後分析尚未完成。手錶的 `ble_sensor`／`ble_sensor_hr` 分別使用模組心率／自行計算心率，兩者都不是綁帶韌體。
+
+`apps/remote_sensor_simulator` 是可模擬手錶／綁帶的測試工具；產品手機 App 不在範圍內。需求與責任邊界見 [AGENTS.md](AGENTS.md)，目前功能、資料流及文件衝突見 [架構核對](docs/ARCHITECTURE.md)。程式存在不代表已通過實機驗收。
 
 ## 專案檔案結構
 
@@ -24,7 +28,7 @@ hear-your-heart/
 │   │   ├── application/
 │   │   ├── examples/
 │   │   └── testdata/
-│   └── n76e003/                 # 感測端 MCU 韌體與 BM7701 測試工具
+│   └── n76e003/                 # N76E003 手錶韌體與 BM7701 測試工具
 │       ├── application/
 │       ├── bm7701/              # 模組參考文件
 │       └── scripts/             # UART 與 BLE 測試工具
