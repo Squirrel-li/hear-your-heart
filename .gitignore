@@ -115,3 +115,6 @@ Objects/
 
 # Large public datasets (re-downloadable)
 /firmware/hub8735-ultra/testdata/fma_metadata/
+
+# Local scratch
+/tmp/
