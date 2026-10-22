@@ -1,5 +1,7 @@
 # BLE 通訊協定（sensor ↔ hub8735）
 
+> 2026-10-18 核對：以下保留協定細節，部分連線描述未同步：ble_sensor 與 ble_sensor_hr 都是手錶，廣播 BLE_watch_ITAP、source=1；BLE_sensor_ITAP 是外部綁帶。HUB 有雙服務探索及各連線 Auto／Manual，不應依舊描述假定只有單一裝置或永遠自動重連。 現況見[架構核對](../../docs/ARCHITECTURE.md)。
+
 對照：`hub8735-ultra/application/embedded_loudspeaker/BLETask.{h,cpp}`、`globalData.h`、`n76e003/application/ble_sensor/source/main.c`
 更新：2026-10-11
 

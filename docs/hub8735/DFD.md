@@ -1,5 +1,7 @@
 # HUB8735 資料流程圖（概念版）
 
+> 2026-10-18 核對：本文保留概念圖，並非目前程式的完整資料流。綁帶由其他人實作，下方 ePy Lite／MAX30103 圖僅為歷史方案；目前曲風不參與選曲，分析完成狀態送 UI，手錶含兩種韌體變體。 現況見[架構核對](../ARCHITECTURE.md)。
+
 依目前實作整理，非已核定的架構規則。細節見 `HRMAX_MUSIC_FLOW.md`、`globalData.h`、`firmware/n76e003/ble-notify-data-format.md`。
 
 ## 1. 播放音樂
@@ -35,7 +37,7 @@ flowchart LR
     MP3[("MP3 檔案")]
 
     C("控制<br/>轉送請求")
-    M("曲目分析<br/>BPM（MiniBPM）<br/>曲風（NPU）")
+    M("曲目分析<br/>BPM（bpm_tempo）<br/>曲風（NPU）")
 
     U -- "分析請求<br/>(新檔／全部重分析)" --> C
     C -- "分析請求" --> M

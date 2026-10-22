@@ -1,5 +1,7 @@
 # BM7701-00-1 Remote Sensor 操作規劃
 
+> 2026-10-18 核對：本文保留早期 BM7701 開發規劃，包含未採用的 Header／CRC 封包提案；不能當作現行協定。BM7701 屬於 N76E003 手錶，外部綁帶不在本專案實作範圍。 現況見[架構核對](../ARCHITECTURE.md)。
+
 ## 文件目的
 
 本文件規劃使用 BM7701-00-1 作為 remote sensor 的 BLE 無線傳輸模組，將 PPG 與 G sensor 資料傳送給 HUB 8735 Ultra。

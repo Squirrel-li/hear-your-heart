@@ -1,5 +1,7 @@
 # 系統架構圖產生 Prompt
 
+> 2026-10-18 核對：本文是歷史繪圖輸入，含已過時的綁帶硬體、單一 BLE 連線及「不跑 NPU」敘述。再次使用時，必須依 AGENTS.md 與 ARCHITECTURE.md 重建現況，不能直接把下列細節當作最新要求。 現況見[架構核對](ARCHITECTURE.md)。
+
 > 給任何 agent 使用。工作目錄：`F:\Universitiy\ITAP`。所有路徑皆相對於此目錄，agent 可直接讀取。
 
 ---
@@ -16,7 +18,7 @@
 
 ## 專案一句話
 
-穿戴式心率感測 → HUB8735 計算目標 BPM → 依目標 BPM 與偏好曲風自動選 MP3 播放（跑步／運動配樂）。
+穿戴式心率感測 → HUB8735 計算目標 BPM → 依目標 BPM 自動選 MP3 播放（跑步／運動配樂）；未來可新增「期望曲風」選項。
 
 ## 先讀這些檔案（依序，事實以它們為準）
 
@@ -59,7 +61,7 @@ Queue（名稱照 `globalData.h`）：`bleRxFrameQueue`、`ppgSensorQueue`、`ac
 
 需在圖或圖例中表達的行為：
 - `analysisTask`：有效 PPG（`status==2` 且 HR≠0）→ HRmax → 穩定 Zone（越界 2% HRmax 並維持 10 s 才換區）→ 目標 BPM（1 Hz，上升每次最多 +5、下降立即）。只輸出目標 BPM，不碰播放。
-- `controlTask`：自動／手動模式；手動（play/pause/stop）優先，只有明確 `auto`／選 Enjoy／Train 才恢復；選曲＝目標 BPM ±5% 內符合者，否則最近 BPM（偏好曲風規則為已確認需求，見狀態）；播放失敗跳過、全失敗則停止。
+- `controlTask`：自動／手動模式；手動（play/pause/stop）優先，只有明確 `auto`／選 Enjoy／Train 才恢復；目前依目標 BPM ±5% 內符合者選曲，否則最近 BPM；播放失敗跳過、全失敗則停止。
 - `audioTask`：**唯一**呼叫 MAX98357 與**唯一**擁有 SD；回報 `Finished`／失敗；歌曲停止後才執行 BPM 掃描（Helix 解 MP3 → 單聲道 PCM → MiniBPM，最多 60 s）。
 - `UITask`：OLED 選單（Mode、Play/Pause、Stop、Volume、BPM Analysis、Songs）→ `uiCmdQueue` → `controlTask`。
 - 感測斷線：已有有效心率後失聯，沿用最後目標 BPM 繼續播放。
@@ -79,7 +81,7 @@ BLE frame（供邊上標註）：GATT service `524CACC0-3C17-D293-8E48-14FE2E4DA
 
 用統一圖例區分三種線型／顏色：**已實作**（實線）、**已確認需求但尚未實作**（虛線）、**提案／待驗證**（點線＋灰）。至少標註：
 
-- 已確認需求、現況可能未實作：偏好曲風選曲、播放中發現新檔的延後分析、檔案被替換自動偵測、NPU 曲風記錄（`AGENTS.md`）。
+- 未完成：播放中發現新檔的延後分析、檔案被替換自動偵測。現況：NPU 曲風已記錄，歌曲有有效 BPM 即可參與自動選曲；「期望曲風」選項為未來功能（`AGENTS.md`）。
 - 提案：YAMNet 曲風（`docs/hub8735/YAMNET_GENRE.md` 寫「目前程式未實作」，但 `music_genre_classifier.cpp/.h` 已存在——**先讀程式確認實際到哪一步，再決定線型**）。
 - 現況：BPM 分析目前只由使用者在 OLED 觸發，BPM 選單不跑 NPU 曲風。
 - 未於硬體驗證：UI 韌體編譯／燒錄、`ble_sensor_hr` 板上 XRAM 與 `.XINIT` 修正、HUB `BLETask` 解析 msgType 01–04。

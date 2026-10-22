@@ -8,14 +8,14 @@
 | `BLETask` | 穿戴端 BLE PPG 封包 | 解出 `PpgSensorElement`（含狀態、心率、接收時間），送入 `ppgSensorQueue` |
 | `analysisTask` | `userInfo.age`、最新有效 PPG（`status == 2`、心率非 0） | 算出 HRmax、穩定 Zone 與目標歌曲 BPM；變化時覆寫 `targetBpmResultQueue` 的最新結果 |
 | `controlTask` | 目標 BPM 結果、播放事件、曲目 BPM 表、序列埠控制 | 依目標 BPM 選曲並把 `Play(filename)` 命令送到 `audioCmdQueue`；手動控制優先 |
-| UITask | OLED 按鍵、uiUpdateQueue | 顯示 BPM 分析選單與排隊、分析中、完成摘要；透過 uiCmdQueue 傳送操作 |
+| UITask | OLED 按鍵、uiUpdateQueue | 顯示 BPM／曲風分析選單、分析中、完成或取消狀態；透過 uiCmdQueue 傳送操作 |
 | audioTask | audioCmdQueue、SD 卡 MP3 | 唯一呼叫 MAX98357 的 task，也是 SD 唯一擁有者；歌曲停止時執行 BPM 掃描與分析，回報播放與分析狀態 |
 
-`analysisTask` 只送目標 BPM 結果，不操作播放裝置。`controlTask` 預設自動選曲；序列埠 `play/stop/pause/resume` 會切到手動控制，只有輸入 `auto` 才恢復感測器自動選曲。`volume` 不改變播放模式。`audioTask` 是唯一呼叫 MP3 播放 API 的 task，並用 `audioPlaybackEventQueue` 回報自動歌曲播畢或播放失敗。
+`analysisTask` 只送目標 BPM 結果，不操作播放裝置。`controlTask` 預設自動選曲；序列埠 `play/stop/pause/resume` 會切到手動控制，輸入 `auto` 或在 OLED Mode 選 Enjoy 才恢復感測器自動選曲（Train／Demo 則恢復各自的自動模式）。`volume` 不改變播放模式。`audioTask` 是唯一呼叫 MP3 播放 API 的 task，並用 `audioPlaybackEventQueue` 回報自動歌曲播畢或播放失敗。
 
 ## 心率到目標 BPM
 
-首次有效心率立即設定 Zone。之後候選 Zone 必須越過原 Zone 邊界 **2% HRmax**，連續保持 **10 秒**才生效；失去有效 PPG 會清除候選倒數。現有模擬資料每 5 秒一筆，最新樣本最多保留 6 秒，目標 BPM 以 1 Hz 更新。
+首次有效心率立即設定 Zone。之後候選 Zone 必須越過原 Zone 邊界 **2% HRmax**，連續保持 **10 秒**才生效；失去有效 PPG 會清除候選倒數。現有模擬資料每 5 秒一筆，最新有效樣本最多保留 15 秒，目標 BPM 以 1 Hz 更新。
 
 | 穩定 Zone | 心率區間 | 穩態目標歌曲 BPM |
 | --- | --- | --- |
@@ -63,17 +63,19 @@
 
 ## OLED 手動選歌
 
-- 只有 Manual 模式的主選單有 Songs，列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
+- 只有 Manual 模式的主選單有 Songs，列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 開啟單曲選單 Play／BPM x2／BPM /2／Back。Play 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
+- BPM 倍數修正：演算法偶爾把節拍判成兩倍或一半，由使用者修正。播放或暫停中，主選單多一列 `Song BPM: 120`，按 OK 開啟同一個單曲選單（無 Play）。x2／/2 送出 `SetSongBpm`（結果須在 30～300），controlTask 轉給 audioTask 寫入 `music_library.json`；BPM 掃描進行中拒絕。之後「Reanalyze all BPM」會覆蓋使用者修正（2026-10-22 使用者決定）。修正不改變手動／自動模式。
 - 曲庫未載入、BPM 分析進行中或沒有曲目時不開啟清單。未分析 BPM 的曲目可手動播放，但不參加自動選曲。
 
 ## OLED 手動 BPM 分析
 
 - 主選單的 BPM Analysis 子選單有 New / unknown BPM 與 Reanalyze all BPM。
 - 掃描只由使用者啟動。controlTask 轉送請求；audioTask 在歌曲停止後掃描 SD 並呼叫 music_bpm_analyzer，不新增 FreeRTOS task，也不在 analysisTask 執行。
-- 若請求時正在播放或暫停，工作排隊；播放命令優先，分析於目前曲目停止後開始。分析以 Helix 解碼 MP3、混成單聲道 PCM，分段送入 MiniBPM；最多分析 60 秒，少於 8 秒或沒有有效估計就算失敗。
+- 若請求時正在播放或暫停，請求會被拒絕並回報 Cancelled，不會排隊；只有停止時接受分析。掃描期間的播放命令會取消分析，已儲存結果保留。分析以 Helix 解碼 MP3、混成單聲道 PCM，分段送入 `bpm_tempo.h`；最多分析 60 秒，少於 8 秒或沒有有效估計就算失敗。每首完成時印出 `timing:` log（解碼、特徵、估計各自耗時）。
+- `bpm_tempo.h`（2026-10-22 取代 MiniBPM）：log-mel 頻譜差 onset 曲線（全頻＋4 頻帶）→ 自相關與傅立葉週期分布 → 約 25 個候選 → 300 棵梯度提升樹（`bpm_tempo_model.h`）打分取最高。模型以 GTZAN、Ballroom、GiantSteps Tempo、ISMIR04 Songs 共 2824 首訓練；重新訓練用 `firmware/hub8735-ultra/tools/bpm_tempo/`（`dump.cpp` 用同一份 `bpm_tempo.h` 在電腦上算特徵，`train.py` 匯出模型）。保留測試集 1404 首（只量一次）：直接正確 75.5%（MiniBPM 56.8%），含 x2／/2 可修正 89.7%（MiniBPM 76.1%）；<70 BPM 的可修正率最低（67%）。板上實測（CMSIS FFT）：60 秒音訊約 12 秒、20～34 秒音訊 3～6 秒；42 首測試曲直接正確 28、含 x2／/2 可修正 33（MiniBPM 19／31）。每首的 timing log 附 `pcm <雜湊>/<樣本數>`，可與 `dump.cpp -DDUMP_ESTIMATE`（電腦端改用同一個 Helix 解碼）比對解碼是否一致。
 - 新檔／未知 BPM 包含未列入清單、BPM 為 0、缺少舊檔案資訊，或檔案大小／FAT 修改時間有變更的曲目。BPM 為 0 的曲目不參加自動選曲。分析成功後以整數 BPM 更新清單；失敗曲目不阻擋其他曲目。
 - 取代檔案依大小與 FAT 修改時間判斷。相同大小和時間戳記的內容替換可能漏檢；若需嚴格保證，應升級為內容指紋比對。
-- BPM 分析選單只分析 BPM，不執行 NPU 曲風分類。
+- BPM 分析選單已接入 NPU 曲風分類：BPM 階段後由 MusicGenreClassifier 呼叫 SDK YAMNet，將曲風存入 `music_library.json`。有有效 BPM 即可參加自動選曲，曲風分析失敗不阻擋。未來可新增使用者的「期望曲風」選項；目前選曲只依 BPM。
 ## 離線 BPM 估計
 
 原有 10 首（`testdata/audio` 的 `music1`～`music10`）用 FFmpeg 將 MP3 解碼，對各曲目前約 180 秒的音訊做頻譜起音強度與自相關分析，再檢查三段各 60 秒的候選節拍。另 6 首是 FMA 資料集（fma_small，CC BY-NC-SA）的 30 秒片段，BPM 取自 Echonest 的 `tempo`（四捨五入，未在此量測）。這些數值都是**估計值**，節奏可能有半拍／雙拍解讀；換 SD 卡曲目或進行正式展示前，應人工核對。
@@ -91,7 +93,7 @@ SD 卡內容放在 `testdata/sd_music`，檔名與原檔對照如下（完整曲
 | 007 | music6 | 016 | FMA 1688 |
 | 008 | FMA 29602 | 009 | FMA 61670 |
 
-檔名為流水號（`001.mp3`～`016.mp3`），不再以 BPM 命名；BPM 以 `music_library.json` 為準，值取自 MiniBPM 的分析結果（板上 60 秒分析，002 取自電腦端 MiniBPM，因板上解碼曾失敗），與上方離線估計不同。OLED 播放標頭顯示 `001.mp3(136)`。
+檔名為流水號（`001.mp3`～`016.mp3`），不再以 BPM 命名；BPM 以 `music_library.json` 為準，值取自 MiniBPM 的分析結果（板上 60 秒分析，002 取自電腦端 MiniBPM，因板上解碼曾失敗），與上方離線估計不同；改用 `bpm_tempo.h` 後須重新分析才會更新。OLED 播放標頭顯示 `001.mp3(136)`。
 
 ## 本機檢查
 
