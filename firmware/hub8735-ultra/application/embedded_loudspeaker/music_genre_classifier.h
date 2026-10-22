@@ -14,7 +14,7 @@ class MusicGenreClassifier {
 public:
     enum class StepResult : uint8_t {
         InProgress,
-        Complete,  // genre 已填入；NN 有輸出但沒有曲風類別時為 GENRE_UNKNOWN
+        Complete,  // genre 已填入：Classical / Electronic / Hip-Hop / Rock / Other
         Failed     // 解碼或 NN 失敗；genre 維持空，之後可重試
     };
 
@@ -54,7 +54,5 @@ private:
     uint32_t streamStartMs_;
     const char* error_;
 };
-
-constexpr const char* GENRE_UNKNOWN = "Unknown";  // 已辨識但沒有曲風結果；不參加曲風符合
 
 #endif
