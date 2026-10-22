@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HUB序列埠主控台</title>
+<style>
+  :root { --bg:#111; --panel:#1b1b1b; --fg:#ddd; --mute:#888; --line:#333;
+          --E:#ff6b6b; --W:#ffc857; --I:#cfd8dc; --D:#7aa2f7; --T:#6c757d; --RAW:#a0a0a0; --TX:#7bd88f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px system-ui, sans-serif;
+         display:flex; flex-direction:column; height:100vh; }
+  header, .bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 10px;
+                 background:var(--panel); border-bottom:1px solid var(--line); }
+  button, select, input { background:#262626; color:var(--fg); border:1px solid #444; border-radius:4px;
+                          padding:4px 8px; font:inherit; }
+  button:hover { border-color:#777; }
+  button:disabled { opacity:.4; }
+  label { display:inline-flex; gap:3px; align-items:center; cursor:pointer; user-select:none; }
+  .group { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding-right:10px;
+           border-right:1px solid var(--line); }
+  .group b { color:var(--mute); font-weight:normal; }
+  #status { color:var(--mute); margin-left:auto; }
+  #log { flex:1; overflow:auto; margin:0; padding:6px 10px; font:12px/1.35 Consolas, monospace;
+         white-space:pre-wrap; word-break:break-all; }
+  .E { color:var(--E); } .W { color:var(--W); } .I { color:var(--I); }
+  .D { color:var(--D); } .T { color:var(--T); } .RAW { color:var(--RAW); } .TX { color:var(--TX); }
+  #cmd { flex:1; min-width:200px; font-family:Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <button id="connect">連線</button>
+  <select id="baud" title="baud rate">
+    <option>2000000</option><option>921600</option><option>115200</option>
+  </select>
+  <button id="clear">清除</button>
+  <button id="save">存檔</button>
+  <label><input type="checkbox" id="follow" checked>自動捲動</label>
+  <span id="status">未連線</span>
+</header>
+<div class="bar">
+  <span class="group"><b>等級</b><span id="levels"></span></span>
+  <span class="group"><b>TAG</b><span id="tags"></span>
+    <button id="tagsAll">全選</button><button id="tagsNone">全不選</button></span>
+  <input id="text" placeholder="關鍵字（可用 /regex/）" size="22">
+</div>
+<div class="bar" id="quick"></div>
+<pre id="log"></pre>
+<div class="bar">
+  <input id="cmd" placeholder="輸入指令後Enter，↑↓叫出歷史（help 可看全部指令）" list="cmds">
+  <datalist id="cmds"></datalist>
+  <button id="send">送出</button>
+</div>
+
+<script>
+// Log line format from debug.cpp: "[ms][L][TAG] message"
+const LINE_RE = /^\[(\d+)\]\[([EWIDT?])\]\[([^\]]*)\] ?(.*)$/;
+function parseLine(s) {
+  const m = LINE_RE.exec(s);
+  return m ? { ms: +m[1], level: m[2], tag: m[3], msg: m[4], raw: s }
+           : { ms: null, level: 'RAW', tag: 'RAW', msg: s, raw: s };
+}
+// self-check
+console.assert(parseLine('[123][I][CONTROL] status: mode=Enjoy').tag === 'CONTROL', 'parse tag');
+console.assert(parseLine('[1][W][BLE] x').level === 'W', 'parse level');
+console.assert(parseLine('boot garbage').level === 'RAW', 'parse raw');
+
+const LEVELS = ['E', 'W', 'I', 'D', 'T', 'RAW', 'TX'];
+const LEVEL_NAMES = { E:'Error', W:'Warn', I:'Info', D:'Debug', T:'Trace', RAW:'非log', TX:'送出' };
+const KNOWN_TAGS = ['MAIN', 'CONTROL', 'ANALYSIS', 'BLE', 'AUDIO', 'BPMSCAN', 'BPM', 'GENRE', 'LIBRARY', 'LOCAL', 'UI'];
+// Common commands; see docs/hub8735/SERIAL_COMMANDS.md for the full list.
+const QUICK = [
+  'status', 'help', 'auto', 'demo', 'train 1', 'train 2', 'pause', 'resume', 'stop',
+  'volume 30', 'volume 60', 'bpm list', 'bpm new', 'bpm cancel',
+  'src ppg watch', 'src ppg chest', 'src ppg local', 'src motion watch', 'src motion local',
+  'ble connect watch', 'ble disconnect watch', 'ble connect chest', 'ble disconnect chest',
+];
+const MAX_LINES = 50000;   // kept in memory and saved
+const MAX_DOM = 5000;      // shown on screen
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('hubcon.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('hubcon.' + k, JSON.stringify(v)); } catch {} },
+};
+
+let lines = [];
+const levelOn = store.get('levels', { E:1, W:1, I:1, D:1, T:0, RAW:1, TX:1 });
+const tagOn = store.get('tags', {});
+let history = store.get('history', []);
+let histPos = history.length;
+
+function checkbox(container, key, text, state, cls) {
+  const l = document.createElement('label');
+  const c = document.createElement('input');
+  c.type = 'checkbox';
+  c.checked = state[key] !== 0 && state[key] !== false;
+  c.dataset.key = key;
+  c.onchange = () => { state[key] = c.checked ? 1 : 0; saveFilters(); render(); };
+  const s = document.createElement('span');
+  s.textContent = text;
+  if (cls) s.className = cls;
+  l.append(c, s);
+  container.append(l);
+}
+LEVELS.forEach(k => checkbox($('levels'), k, LEVEL_NAMES[k], levelOn, k));
+function addTag(tag) {
+  if (tag in tagOn && $('tags').querySelector(`[data-key="${CSS.escape(tag)}"]`)) return;
+  if (!(tag in tagOn)) tagOn[tag] = 1;
+  checkbox($('tags'), tag, tag, tagOn);
+}
+KNOWN_TAGS.concat(Object.keys(tagOn)).forEach(addTag);
+function setAllTags(v) {
+  for (const k in tagOn) tagOn[k] = v;
+  $('tags').querySelectorAll('input').forEach(c => c.checked = !!v);
+  saveFilters(); render();
+}
+$('tagsAll').onclick = () => setAllTags(1);
+$('tagsNone').onclick = () => setAllTags(0);
+function saveFilters() { store.set('levels', levelOn); store.set('tags', tagOn); }
+
+let textTest = () => true;
+$('text').oninput = () => {
+  const t = $('text').value;
+  const m = /^\/(.+)\/([a-z]*)$/.exec(t);
+  try {
+    if (m) { const re = new RegExp(m[1], m[2]); textTest = s => re.test(s); }
+    else { const q = t.toLowerCase(); textTest = s => s.toLowerCase().includes(q); }
+    $('text').style.borderColor = '';
+  } catch { $('text').style.borderColor = 'var(--E)'; return; }
+  render();
+};
+
+function visible(e) {
+  // RAW/TX lines are filtered by level only; their tag box would just duplicate it.
+  const tagOk = e.level === 'RAW' || e.level === 'TX' || tagOn[e.tag];
+  return levelOn[e.level] && tagOk && textTest(e.raw);
+}
+function rowFor(e) {
+  const d = document.createElement('div');
+  d.className = e.level;
+  d.textContent = e.raw;
+  return d;
+}
+function trimDom() {
+  const log = $('log');
+  while (log.childElementCount > MAX_DOM) log.firstElementChild.remove();
+}
+function render() {
+  const frag = document.createDocumentFragment();
+  const shown = lines.filter(visible).slice(-MAX_DOM);
+  shown.forEach(e => frag.append(rowFor(e)));
+  $('log').replaceChildren(frag);
+  if ($('follow').checked) $('log').scrollTop = $('log').scrollHeight;
+}
+
+// Batch new lines per animation frame so a fast stream does not freeze the page.
+let pending = [];
+function push(e) {
+  lines.push(e);
+  if (e.level !== 'RAW' && e.level !== 'TX' && !(e.tag in tagOn)) { addTag(e.tag); saveFilters(); }
+  if (visible(e)) {
+    if (!pending.length) requestAnimationFrame(flush);
+    pending.push(e);
+  }
+}
+function flush() {
+  const frag = document.createDocumentFragment();
+  pending.forEach(e => frag.append(rowFor(e)));
+  pending = [];
+  $('log').append(frag);
+  trimDom();
+  if (lines.length > MAX_LINES) lines = lines.slice(-MAX_LINES);
+  if ($('follow').checked) $('log').scrollTop = $('log').scrollHeight;
+}
+
+// ---- Web Serial ----
+let port = null, reader = null, writer = null;
+const enc = new TextEncoder();
+
+async function connect() {
+  if (!('serial' in navigator)) { alert('這個瀏覽器不支援 Web Serial，請用 Chrome 或 Edge 開啟。'); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: +$('baud').value, bufferSize: 65536 });
+  } catch (err) { status('連線失敗：' + err.message); port = null; return; }
+  writer = port.writable.getWriter();
+  $('connect').textContent = '斷線';
+  status(`已連線 @ ${$('baud').value}`);
+  readLoop();
+}
+async function disconnect() {
+  const p = port;
+  port = null;
+  try { await reader?.cancel(); } catch {}
+  try { writer?.releaseLock(); } catch {}
+  try { await p?.close(); } catch {}
+  reader = writer = null;
+  $('connect').textContent = '連線';
+  status('未連線');
+}
+async function readLoop() {
+  const dec = new TextDecoderStream();
+  const done = port.readable.pipeTo(dec.writable).catch(() => {});
+  reader = dec.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const s = buf.slice(0, i).replace(/\r$/, '');
+        buf = buf.slice(i + 1);
+        if (s) push(parseLine(s));
+      }
+    }
+  } catch (err) { status('讀取錯誤：' + err.message); }
+  reader.releaseLock();
+  await done;
+  if (port) disconnect();  // device unplugged
+}
+async function send(cmd) {
+  cmd = cmd.trim();
+  if (!cmd) return;
+  if (!writer) { status('尚未連線'); return; }
+  await writer.write(enc.encode(cmd + '\n'));
+  push({ level: 'TX', tag: 'TX', msg: cmd, raw: '>> ' + cmd });
+  if (history[history.length - 1] !== cmd) history.push(cmd);
+  history = history.slice(-100);
+  histPos = history.length;
+  store.set('history', history);
+}
+function status(t) { $('status').textContent = t; }
+navigator.serial?.addEventListener('disconnect', e => { if (e.target === port) disconnect(); });
+
+$('connect').onclick = () => port ? disconnect() : connect();
+$('clear').onclick = () => { lines = []; render(); };
+$('save').onclick = () => {
+  const blob = new Blob([lines.map(e => e.raw).join('\n') + '\n'], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'hub_log_' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('follow').onchange = () => { if ($('follow').checked) $('log').scrollTop = $('log').scrollHeight; };
+
+QUICK.forEach(c => {
+  const b = document.createElement('button');
+  b.textContent = c;
+  b.onclick = () => send(c);
+  $('quick').append(b);
+  const o = document.createElement('option');
+  o.value = c;
+  $('cmds').append(o);
+});
+$('send').onclick = () => { send($('cmd').value); $('cmd').value = ''; };
+$('cmd').onkeydown = e => {
+  if (e.key === 'Enter') { $('send').click(); }
+  else if (e.key === 'ArrowUp' && histPos > 0) { $('cmd').value = history[--histPos]; e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { histPos = Math.min(history.length, histPos + 1); $('cmd').value = history[histPos] ?? ''; e.preventDefault(); }
+};
+</script>
+</body>
+</html>

@@ -681,6 +681,48 @@ void handleUiCommand(const UiCommandElement& cmd)
         break;
     }
 }
+const char* sourceLabel(SensorSource source)
+{
+    return source == SensorSource::Chest ? "chest" : source == SensorSource::Watch ? "watch" : "local";
+}
+
+// "status": snapshot of controlTask state for the PC console (apps/hub_serial_console).
+void reportStatus()
+{
+    LOGI(TAG, "status: mode=%s automatic=%d target=%u zone=%u motion=%u ppg=%s imu=%s songs=%u analysis=%d heap=%u",
+         modeLabel(playMode), automaticMode ? 1 : 0, haveTargetBpm ? static_cast<unsigned>(targetBpm) : 0u,
+         static_cast<unsigned>(activeZone), static_cast<unsigned>(motionLevel), sourceLabel(activePpgSource),
+         sourceLabel(activeImuSource), static_cast<unsigned>(musicLibrary.count), musicBpmAnalysisBusy ? 1 : 0,
+         static_cast<unsigned>(xPortGetFreeHeapSize()));
+    if (playMode == PlayMode::Train) {
+        LOGI(TAG, "status: train plan=%u stage=%u remaining=%us running=%d", static_cast<unsigned>(trainPlan + 1),
+             static_cast<unsigned>(trainStage), static_cast<unsigned>(trainRemainingS), trainRunning ? 1 : 0);
+    }
+}
+
+// "ble connect|disconnect|auto|manual chest|watch": same commands as the OLED BLE menu.
+void handleBleSerial(const String& input)
+{
+    BleCmdElement cmd{};
+    if (input.startsWith("ble connect ")) cmd.command = BleCommandType::Connect;
+    else if (input.startsWith("ble disconnect ")) cmd.command = BleCommandType::Disconnect;
+    else if (input.startsWith("ble auto ")) cmd.command = BleCommandType::SetAuto;
+    else if (input.startsWith("ble manual ")) cmd.command = BleCommandType::SetManual;
+    else {
+        LOGW(TAG, "serial: usage: ble connect|disconnect|auto|manual chest|watch");
+        return;
+    }
+    if (input.endsWith(" chest")) cmd.device = SensorSource::Chest;
+    else if (input.endsWith(" watch")) cmd.device = SensorSource::Watch;
+    else {
+        LOGW(TAG, "serial: usage: ble connect|disconnect|auto|manual chest|watch");
+        return;
+    }
+    if (bleCmdQueue == nullptr || xQueueSend(bleCmdQueue, &cmd, pdMS_TO_TICKS(20)) != pdPASS) {
+        LOGW(TAG, "BLE command was not sent");
+    }
+}
+
 void handleSerialCommand(String input)
 {
     input.trim();
@@ -746,6 +788,14 @@ void handleSerialCommand(String input)
         sendManualCommand(command);
     } else if (input.equalsIgnoreCase("bpm") || input.startsWith("bpm ")) {
         handleBpmSerial(input);
+    } else if (input.equalsIgnoreCase("status")) {
+        reportStatus();
+    } else if (input.startsWith("ble ")) {
+        handleBleSerial(input);
+    } else if (input.equalsIgnoreCase("help")) {
+        LOGI(TAG, "commands: status | help | auto | demo | train [1|2] | play <file> | pause | resume | stop | volume <0-100>");
+        LOGI(TAG, "  src ppg|motion chest|watch|local | ble connect|disconnect|auto|manual chest|watch");
+        LOGI(TAG, "  bpm list|new|all|cancel|x2 <song>|/2 <song>|set <song> <bpm>");
     } else {
         LOGW(TAG, "serial: unknown command '%s'", input.c_str());
     }
