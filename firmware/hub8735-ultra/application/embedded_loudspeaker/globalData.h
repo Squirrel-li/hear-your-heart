@@ -166,7 +166,8 @@ enum class AudioCommandType : uint8_t {
     SetVolume,
     AnalyzeNewOrUnknownBpm,
     ReanalyzeAllBpm,
-    CancelBpmAnalysis
+    CancelBpmAnalysis,
+    SetSongBpm  // user x2 / /2: write bpm for filename into music_library.json
 };
 
 struct AudioCmdElement {
@@ -174,6 +175,7 @@ struct AudioCmdElement {
     uint8_t volumePercent;
     uint8_t isAutomatic;
     int16_t songIndex;
+    uint16_t bpm;  // SetSongBpm
     char filename[AUDIO_FILENAME_MAX];
 };
 
@@ -290,7 +292,8 @@ enum class UiCommandType : uint8_t {
     SetImuSource,
     PowerOff,  // enter software standby
     PowerOn,   // leave standby; playback stays stopped
-    RestartTrain  // restart the current Train plan from stage 1
+    RestartTrain,  // restart the current Train plan from stage 1
+    SetSongBpm     // songIndex's BPM becomes bpm (user corrects x2 / /2)
 };
 
 struct UiCommandElement {
@@ -300,6 +303,7 @@ struct UiCommandElement {
     uint8_t trainPlan;  // SetMode Train: index into TRAIN_PLANS
     int16_t songIndex;  // PlaySong: musicLibrary index
     SensorSource source;  // SetPpgSource / SetImuSource
+    uint16_t bpm;  // SetSongBpm
 };
 
 // Log 資料
