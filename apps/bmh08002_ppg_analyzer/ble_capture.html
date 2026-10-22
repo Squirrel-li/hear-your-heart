@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>手錶 PPG / ACC 資料記錄</title>
+<style>
+body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-width:850px;margin:40px auto;padding:0 20px}section{background:white;border:1px solid #c8d8dd;border-radius:12px;padding:22px;margin:20px 0}h1{font-size:28px}button,select{font:inherit;padding:10px;margin:6px 8px 6px 0;max-width:100%}button{cursor:pointer}output{display:block;white-space:pre-wrap}label{display:block}small{color:#45616b}:focus-visible{outline:3px solid #087b88}#error{color:#a02623}code{overflow-wrap:anywhere}
+</style>
+<h1>手錶 PPG / ACC 資料記錄</h1>
+<p>電腦藍牙直接連接 <code>BLE_capture_ITAP</code>。PPG 約 35.7 Hz、加速度 26 Hz；使用手錶時間戳，保留序號與漏包資訊。</p>
+<section><h2>1. 連線並記錄</h2>
+<label>活動標記 <select id="activity"><option value="rest">靜止</option><option value="walk">走路</option><option value="run">跑步</option><option value="arm_motion">擺手</option><option value="loose">鬆動佩戴</option></select></label>
+<button id="connect" disabled>選擇手錶，開始記錄</button><button id="stop" disabled>停止並斷線</button>
+<output id="state" role="status">正在開啟本機資料庫…</output><output id="stats" aria-live="off"></output><output id="error" role="alert"></output>
+<p><small>活動標記可隨時切換，記錄的是操作當下的標記，並非精準動作起始時間。手錶模組心率不是獨立驗證真值。頁面保持開啟，完成後匯出；關閉 HUB 的自動連線，避免它占用手錶連線。</small></p>
+</section>
+<section><h2>2. 匯出記錄</h2>
+<label>本機已保存的記錄 <select id="sessions"></select></label>
+<button id="ppg" disabled>下載 PPG CSV</button><button id="acc" disabled>下載 ACC CSV</button><button id="raw" disabled>下載完整 JSON</button>
+<p>通知逐筆存入此瀏覽器的 IndexedDB，重新整理後仍可選取舊記錄。停止後下載三個檔案作備份；清除網站資料或瀏覽器儲存回收可能移除本機記錄。</p>
+<p><small>PPG 與 ACC 的 elapsed_s 都是手錶開機時間（同一時鐘），不是電腦收包時間。無法解析、重複或倒序封包僅保留在完整 JSON。異常重啟會停止這次記錄，重新連線會建立新記錄。</small></p>
+</section>
+<script>
+'use strict';
+// Shared by the page and the runnable Node checks (no Bluetooth needed).
+class CaptureDecoder {
+  constructor(){this.streams={};this.anchor=null;}
+  decode(view){
+    const type=view.byteLength>=5?view.getUint8(4):0;
+    const length=type===0x11?20:type===0x13?15:0;
+    if(!length||view.byteLength!==length)throw Error('unsupported_type_or_length');
+    const kind=type===0x11?'ppg':'acc',ms=view.getUint32(0),sequence=view.getUint32(5);
+    const previous=this.streams[kind];
+    let gap=0,delta=null;
+    if(previous){
+      const step=(sequence-previous.sequence)>>>0;
+      if(!step)throw Error('duplicate_sequence');
+      if(step>=0x80000000)throw Error('reset_or_reordered_sequence');
+      gap=step-1;delta=(ms-previous.ms)>>>0;
+      if(delta===0)throw Error('duplicate_timestamp');
+      if(delta>=0x80000000)throw Error('reset_or_reordered_timestamp');
+    }
+    // Nearest epoch to the most recent sample, shared across both streams.
+    const extended=previous?previous.extended+delta:this.anchor===null?ms:
+      ms+Math.round((this.anchor-ms)/4294967296)*4294967296;
+    const row={kind,elapsed_s:extended/1000,sensor_time_ms:ms,sequence,seq_gap:gap,dt_ms:delta??''};
+    if(kind==='ppg'){
+      row.status=view.getUint8(9);row.d1=view.getUint8(11);
+      row.ir_ppg=view.getUint16(16);row.red_ppg=view.getUint16(18);
+      if(row.status>2)throw Error('invalid_status');
+    }else{
+      row.acc_x=view.getInt16(9);row.acc_y=view.getInt16(11);row.acc_z=view.getInt16(13);
+    }
+    this.streams[kind]={sequence,ms,extended};this.anchor=Math.max(this.anchor??extended,extended);
+    return row;
+  }
+}
+function csvText(records,kind){
+  const fields=['elapsed_s',...(kind==='ppg'?['ir_ppg','red_ppg','status','d1']:['acc_x','acc_y','acc_z']),
+    'sensor_time_ms','sequence','seq_gap','dt_ms','host_elapsed_s','host_unix_ms','activity'];
+  const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  return fields.join(',')+'\r\n'+records.filter(r=>r.sample?.kind===kind).map(r=>
+    fields.map(k=>quote(r.sample[k]??r[k])).join(',')).join('\r\n')+'\r\n';
+}
+// UI starts here; tests evaluate only the pure decoder/export section above.
+const $=id=>document.getElementById(id),uuid=n=>`0000${n}-0000-1000-8000-00805f9b34fb`;
+let db,device,characteristic,current,decoder,recording=false,connecting=false,start=0;
+let totals,pending=new Set();
+function error(e){$('error').textContent=String(e.message||e);}
+function render(){
+  $('connect').disabled=!db||recording||connecting;
+  $('stop').disabled=!recording;
+  for(const id of ['ppg','acc','raw'])$(id).disabled=recording||connecting||!$('sessions').value;
+  if(totals)$('stats').textContent=`PPG ${totals.ppg} 筆｜ACC ${totals.acc} 筆｜序號缺口 ${totals.gaps} 筆｜異常 ${totals.bad} 筆｜已寫入 ${totals.saved} 筆`;
+}
+function transaction(store,action){
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,'readwrite');action(tx.objectStore(store));
+    tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||Error('storage_error'));
+    tx.onabort=()=>reject(tx.error||Error('storage_aborted'));
+  });
+}
+function all(store,index,key){return new Promise((resolve,reject)=>{
+  const object=db.transaction(store).objectStore(store);
+  const req=index?object.index(index).getAll(key):object.getAll();
+  req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+});}
+async function refresh(){
+  const selected=$('sessions').value;
+  $('sessions').replaceChildren();
+  for(const s of (await all('sessions')).reverse()){
+    const option=document.createElement('option');option.value=s.id;
+    option.textContent=`${s.started} — ${s.device}`;$('sessions').append(option);
+  }
+  if(current)$('sessions').value=current.id;else if(selected)$('sessions').value=selected;
+  render();
+}
+async function stop(message='記錄已停止；可下載備份。'){
+  recording=false;
+  if(characteristic)characteristic.removeEventListener('characteristicvaluechanged',receive);
+  if(device?.gatt.connected)device.gatt.disconnect();
+  await Promise.allSettled([...pending]);
+  $('state').textContent=message;render();
+}
+function receive(event){
+  if(!recording)return;
+  const view=event.target.value;
+  const record={session:current.id,host_elapsed_s:(performance.now()-start)/1000,
+    host_unix_ms:Date.now(),activity:$('activity').value,
+    raw_hex:Array.from(new Uint8Array(view.buffer,view.byteOffset,view.byteLength),b=>b.toString(16).padStart(2,'0')).join(' ')};
+  let reset=false;
+  try{record.sample=decoder.decode(view);totals[record.sample.kind]++;totals.gaps+=record.sample.seq_gap;}
+  catch(e){record.error=e.message;totals.bad++;reset=e.message.startsWith('reset_');}
+  // Each received frame is committed independently; unfinished writes are awaited on stop.
+  const save=transaction('frames',store=>store.add(record));pending.add(save);
+  save.then(()=>{totals.saved++;},e=>{error(e);void stop('寫入失敗，已停止；請匯出已保存的資料。');})
+    .finally(()=>{pending.delete(save);render();});
+  if(reset)void stop('偵測到裝置重啟或倒序封包；已停止，請重新連線建立新記錄。');
+}
+$('connect').onclick=async()=>{
+  connecting=true;render();$('error').textContent='';
+  try{
+    if(!navigator.bluetooth||!isSecureContext)throw Error('請用支援 Web Bluetooth 的 Chrome／Edge 開啟 localhost。');
+    device=await navigator.bluetooth.requestDevice({filters:[{name:'BLE_capture_ITAP'}],optionalServices:[uuid('fff0')]});
+    const selected=device;
+    device.addEventListener('gattserverdisconnected',()=>{if(recording&&device===selected)void stop('藍牙已斷線；本次資料保留，重新連線另開新記錄。');});
+    const server=await device.gatt.connect();
+    const service=await server.getPrimaryService(uuid('fff0'));
+    characteristic=await service.getCharacteristic(uuid('fff1'));
+    current={id:crypto.randomUUID(),started:new Date().toISOString(),device:device.name,format:1,
+      firmware:'ble_sensor_capture',acc_odr_hz:26,acc_range_g:8,acc_units:'raw int16; 0.244 mg/LSB',
+      ppg_time:'UART packet completion',acc_time:'DRDY poll/readout; no FIFO',reference:'module D3 is not independent ground truth'};
+    await transaction('sessions',store=>store.add(current));
+    decoder=new CaptureDecoder();totals={ppg:0,acc:0,gaps:0,bad:0,saved:0};start=performance.now();recording=true;
+    characteristic.addEventListener('characteristicvaluechanged',receive);
+    await characteristic.startNotifications();
+    $('state').textContent='已連線，持續記錄中。';await refresh();
+  }catch(e){await stop('未開始或連線失敗；已收到的資料仍保留。');error(e);}
+  finally{connecting=false;render();}
+};
+$('stop').onclick=()=>void stop();$('sessions').onchange=render;
+for(const kind of ['ppg','acc','raw'])$(kind).onclick=async()=>{
+  try{
+    const id=$('sessions').value,records=await all('frames','session',id);
+    const metadata=(await all('sessions')).find(s=>s.id===id);
+    const raw=kind==='raw',text=raw?JSON.stringify({metadata,records},null,2):csvText(records,kind);
+    const url=URL.createObjectURL(new Blob([text],{type:raw?'application/json':'text/csv;charset=utf-8'}));
+    const a=document.createElement('a');a.href=url;a.download=`${id}_${kind}.${raw?'json':'csv'}`;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),10000);
+  }catch(e){error(e);}
+};
+addEventListener('beforeunload',e=>{if(recording||pending.size){e.preventDefault();e.returnValue='';}});
+const open=indexedDB.open('itap-ble-capture',1);
+open.onupgradeneeded=()=>{
+  open.result.createObjectStore('sessions',{keyPath:'id'});
+  open.result.createObjectStore('frames',{autoIncrement:true}).createIndex('session','session');
+};
+open.onsuccess=async()=>{db=open.result;try{await refresh();$('state').textContent='就緒；請連接手錶。';}catch(e){error(e);}};
+open.onerror=()=>error(open.error);
+</script></html>
