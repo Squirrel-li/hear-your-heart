@@ -36,6 +36,7 @@
 | `0x02` | acc + gyro | 21B | 同一次取樣的 Acc 與 Gyro 合併成一個 frame，sensor 目前送這個。 |
 | `0x03` | Acc | 15B | 只含 Acc，hub 可解析，sensor 目前不送。 |
 | `0x04` | Gyro | 15B | 只含 Gyro，hub 可解析，sensor 目前不送。 |
+| `0x05` | PPG 原始批次 | 10+4N B | `sequence`（第一筆）＋`status`＋N 筆 `ppg1`/`ppg2`；`ble_sensor_hr` 以 N=2（18B）送出，hub 驗證長度後以同一套演算法自算心率。格式見 `firmware/n76e003/ble-notify-data-format.md` 4.1 節。 |
 
 PPG（20B）：
 
