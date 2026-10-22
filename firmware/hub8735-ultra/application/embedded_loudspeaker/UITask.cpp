@@ -91,9 +91,9 @@ Screen screen = Screen::Top;
 uint16_t cursor = TopMode;
 uint16_t menuTop = 0;
 
-// Mirrors the choice sent to analysisTask (both start on Chest).
-SensorSource ppgSource = SensorSource::Chest;
-SensorSource imuSource = SensorSource::Chest;
+// Mirrors the choice sent to analysisTask (PPG starts on Watch, IMU on Local).
+SensorSource ppgSource = SensorSource::Watch;
+SensorSource imuSource = SensorSource::Local;
 
 // Reported by controlTask / audioTask.
 PlayMode playMode = PlayMode::Enjoy;
