@@ -21,6 +21,9 @@
 #include <SPI.h>
 #include <Wire.h>  // only so the builder adds the Wire library, which ships Adafruit_GFX
 #include <Adafruit_OLED_libraries/Adafruit_GFX.h>  // SDK copy; the external one pulls BusIO, which does not build here
+#include <FreeRTOS.h>
+#include <task.h>
+#include <semphr.h>
 
 extern spi_t spi_obj1;  // SPI1's HAL object (SPI.cpp); spi_master_write() returns the byte read back
 
@@ -34,7 +37,7 @@ constexpr uint8_t PIN_TOUCH_IRQ = 15;  // XPT2046 PENIRQ, low while touched
 
 constexpr int16_t W = 160;  // landscape
 constexpr int16_t H = 128;
-constexpr uint32_t TFT_HZ = 20000000;
+constexpr uint32_t TFT_HZ = 40000000;  // ST7735S is rated 15 MHz; lower this if the image tears or speckles
 constexpr uint32_t TOUCH_HZ = 2000000;  // XPT2046 max ~2.5 MHz
 // Landscape: 0xA8 = MY | MV | BGR; if the image is upside down use 0x68 (MX | MV | BGR).
 // If red/blue swap toggle 0x08 (BGR). The panel RAM is 132x162 with the glass at column 2 / row 1,
@@ -43,18 +46,22 @@ constexpr uint8_t TFT_MADCTL = 0xA8;
 constexpr uint8_t TFT_COL_OFFSET = 1;
 constexpr uint8_t TFT_ROW_OFFSET = 2;
 
-// Touch calibration (raw value at screen edge 0 / edge max), fitted from the TOUCH_TEST screen;
-// Y is reversed on this panel. Redo with TOUCH_TEST = true if taps land in the wrong place.
-constexpr int16_t TOUCH_X_MIN = 365, TOUCH_X_MAX = 3713;
-constexpr int16_t TOUCH_Y_MIN = 3435, TOUCH_Y_MAX = 437;
+// Touch calibration: raw value at screen edge 0 / edge max, from strokes along all four edges on the
+// TOUCH_TEST screen with the protective film removed; mapped linearly between them. Y is reversed.
+// Redo with TOUCH_TEST = true if taps drift.
+constexpr int16_t TOUCH_X_MIN = 400, TOUCH_X_MAX = 3650;
+constexpr int16_t TOUCH_Y_MIN = 3500, TOUCH_Y_MAX = 560;
 constexpr bool TOUCH_TEST = false;  // true: boot into the calibration screen instead of the UI
 constexpr bool TOUCH_SWAP_XY = true;  // XPT2046 X runs along the panel's short side; swap for landscape
-// PENIRQ decides "touched"; pressure only decides whether the coordinates are trustworthy, so a light
-// press (or one through the protective film) still counts and just reuses the last good position.
-constexpr uint16_t TOUCH_Z_MIN = 120;  // measured through the film: real presses 260-700, lift-off samples below
+constexpr uint16_t TOUCH_Z_MIN = 40;  // below this the position is not trusted (the press itself comes from PENIRQ)
 
 constexpr uint32_t LONG_PRESS_MS = 600;
-constexpr int16_t SWIPE_MIN_PX = 30;
+constexpr uint32_t TOUCH_RELEASE_MS = 15;  // PENIRQ must stay high this long to end a press (light presses flicker)
+constexpr int16_t TOUCH_JITTER_RAW = 300;  // max disagreement between two reads of one axis (~14 px); light
+                                           // touches are noisy, the longer swipe distances absorb it
+constexpr int16_t SWIPE_MIN_PX = 40;
+constexpr int16_t FLICK_MIN_PX = 24;  // used when the whole touch lasted under FLICK_MS
+constexpr uint32_t FLICK_MS = 250;
 constexpr int16_t TAP_SLOP_PX = 25;  // movement allowed before a hold stops counting as a long press
 
 // RGB565
@@ -69,12 +76,12 @@ const uint16_t MODE_COLOR[] = {C_GRAY, C_RED, C_ORANGE, C_GREEN};
 
 enum Tile : uint8_t { TILE_NOW, TILE_WORKOUT, TILE_MUSIC, TILE_COUNT };
 enum class Screen : uint8_t { Tiles, Quick, ModeList, Power, Standby };
-enum class Ev : uint8_t { None, Up, Down, Ok, Back, Tap, SwipeLeft, SwipeRight, SwipeUp, SwipeDown };
-const char* const EV_NAME[] = {"", "Up", "Down", "Ok", "Back", "Tap", "SwipeLeft", "SwipeRight", "SwipeUp", "SwipeDown"};
+enum class Ev : uint8_t { None, Up, Down, Ok, Back, Tap, SwipeLeft, SwipeRight, SwipeUp, SwipeDown, Press };
+const char* const EV_NAME[] = {"", "Up", "Down", "Ok", "Back", "Tap", "SwipeLeft", "SwipeRight", "SwipeUp", "SwipeDown", "Press"};
 
 struct Input {
     Ev ev;
-    int16_t x, y;  // Tap position
+    int16_t x, y;  // Tap / Press position
 };
 
 // Mode list rows: Enjoy, Train full, Train short, Demo, Stop.
@@ -135,6 +142,17 @@ bool trainDone = false;
 uint8_t heartRate = 92;
 uint8_t demoLevel = 0;
 bool dirty = true;
+bool redrawNow = false;  // redraw even with the finger down (touch feedback)
+bool touchActive = false;  // finger down: hold off redraws so a swipe is not cut by a frame push
+uint8_t pendingRow = 0xFF;  // Mode list row picked, applied at pendingAt so the highlight is seen first
+uint32_t pendingAt = 0;
+// uiTask owns input and state changes; displayTask draws and pushes frames. stateLock covers the UI state
+// while either side uses it, spiLock covers SPI1, which the panel and the touch chip share.
+SemaphoreHandle_t stateLock = nullptr, spiLock = nullptr;
+TaskHandle_t displayTaskHandle = nullptr;
+// temporary freeze diagnosis, printed once a second by loop(): progress counters and the last step reached
+volatile uint32_t uiLoops = 0, dispFrames = 0;
+volatile uint8_t uiStage = 0, dispStage = 0;
 int16_t touchAx = 0, touchAy = 0;  // last raw sample after the axis swap (touch test)
 
 // ---------- ST7735S ----------
@@ -171,20 +189,37 @@ void tftPush()
 {
     const uint8_t caset[] = {0, TFT_COL_OFFSET, 0, static_cast<uint8_t>(TFT_COL_OFFSET + W - 1)};
     const uint8_t raset[] = {0, TFT_ROW_OFFSET, 0, static_cast<uint8_t>(TFT_ROW_OFFSET + H - 1)};
+    dispStage = 4;  // waiting for spiLock in tftPush
+    xSemaphoreTake(spiLock, portMAX_DELAY);
+    dispStage = 5;  // pushing the frame
     tftCommand(0x2A, caset, 4);
     tftCommand(0x2B, raset, 4);
     tftCommand(0x2C);  // RAMWR, DC stays high for the pixels
-    // shortcut: one blocking byte per call (the SDK's stream transfer is interrupt-driven and returns early);
-    // if the frame time is too slow, switch to spi_master_write_stream_dma with a tx-done hook.
+    // One interrupt-driven stream for the whole frame instead of a call per byte (~65 ms -> about the bus
+    // time). The stream returns early, so wait for the driver to finish feeding the FIFO, then for the
+    // shifter to go idle before DC may change again.
+    static uint8_t frame[W * H * 2];
     const uint16_t* px = canvas.getBuffer();
-    for (int32_t i = 0; i < W * H; ++i) {
-        SPI1.transfer(static_cast<uint8_t>(px[i] >> 8));
-        SPI1.transfer(static_cast<uint8_t>(px[i]));
+    for (int32_t i = 0; i < W * H; ++i) {  // panel wants big-endian RGB565
+        frame[2 * i] = static_cast<uint8_t>(px[i] >> 8);
+        frame[2 * i + 1] = static_cast<uint8_t>(px[i]);
     }
+    if (spi_master_write_stream(&spi_obj1, reinterpret_cast<char*>(frame), sizeof(frame)) != 0) {
+        for (uint32_t i = 0; i < sizeof(frame); ++i) SPI1.transfer(frame[i]);  // driver refused: slow path
+    } else {
+        const uint32_t start = millis();
+        while ((spi_obj1.state & SPI_STATE_TX_BUSY) && millis() - start < 200) {
+        }
+        while (spi_busy(&spi_obj1) && millis() - start < 200) {
+        }
+    }
+    dispStage = 6;  // frame pushed
+    xSemaphoreGive(spiLock);
 }
 
 void tftSleep(bool sleep)
 {
+    xSemaphoreTake(spiLock, portMAX_DELAY);
     if (sleep) {
         tftCommand(0x28);  // DISPOFF; backlight is hard-wired to 3.3V, so the panel stays lit black
         tftCommand(0x10);  // SLPIN
@@ -193,6 +228,7 @@ void tftSleep(bool sleep)
         delay(120);
         tftCommand(0x29);
     }
+    xSemaphoreGive(spiLock);
 }
 
 // ---------- XPT2046 ----------
@@ -205,27 +241,41 @@ uint16_t touchChannel(uint8_t cmd)
     return static_cast<uint16_t>(((hi << 8) | lo) >> 3);
 }
 
+// The board core's map() returns x unchanged when in_max < in_min, so the reversed Y axis needs its own math.
+int16_t touchToScreen(int16_t raw, int16_t rawAt0, int16_t rawAtMax, int16_t maxPx)
+{
+    const int32_t px = static_cast<int32_t>(raw - rawAt0) * maxPx / (rawAtMax - rawAt0);
+    return constrain(px, 0, maxPx);
+}
+
 // Returns false when the pressure is too light to trust the position (x/y left unchanged).
 bool touchRead(int16_t& x, int16_t& y)
 {
     // SPI1 hardware CS also selects the LCD: a NOP command makes it ignore the touch bytes as parameters.
+    uiStage = 10;  // waiting for spiLock in touchRead
+    xSemaphoreTake(spiLock, portMAX_DELAY);
+    uiStage = 11;  // touch SPI transfer
     tftCommand(0x00);
     SPI1.beginTransaction(SPISettings(TOUCH_HZ, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_TOUCH_CS, LOW);
     const uint16_t z1 = touchChannel(0xB1);
-    // Two samples per axis averaged: light presses through the film are noisy.
-    const uint16_t rawY = (touchChannel(0x91) + touchChannel(0x91)) / 2;
-    const uint16_t rawX = (touchChannel(0xD1) + touchChannel(0xD0)) / 2;  // last one PD=00: pen IRQ back on
+    // Two samples per axis: a finger landing or lifting gives readings that disagree (they showed up as
+    // taps on the bottom edge during fast swipes), so such a sample is dropped instead of averaged in.
+    const uint16_t y1 = touchChannel(0x91), y2 = touchChannel(0x91);
+    const uint16_t x1 = touchChannel(0xD1), x2 = touchChannel(0xD0);  // last one PD=00: pen IRQ back on
     digitalWrite(PIN_TOUCH_CS, HIGH);
     SPI1.beginTransaction(SPISettings(TFT_HZ, MSBFIRST, SPI_MODE0));
-    if (z1 < TOUCH_Z_MIN) return false;
+    xSemaphoreGive(spiLock);
+    uiStage = 12;  // touch read done
+    if (z1 < TOUCH_Z_MIN || abs(x1 - x2) > TOUCH_JITTER_RAW || abs(y1 - y2) > TOUCH_JITTER_RAW) return false;
+    const uint16_t rawX = (x1 + x2) / 2, rawY = (y1 + y2) / 2;
 
     const int16_t ax = TOUCH_SWAP_XY ? rawY : rawX;
     const int16_t ay = TOUCH_SWAP_XY ? rawX : rawY;
     touchAx = ax;
     touchAy = ay;
-    x = constrain(map(ax, TOUCH_X_MIN, TOUCH_X_MAX, 0, W - 1), 0, W - 1);
-    y = constrain(map(ay, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, H - 1), 0, H - 1);
+    x = touchToScreen(ax, TOUCH_X_MIN, TOUCH_X_MAX, W - 1);
+    y = touchToScreen(ay, TOUCH_Y_MIN, TOUCH_Y_MAX, H - 1);
     static uint32_t lastLog = 0;
     if (millis() - lastLog > 300) {
         lastLog = millis();
@@ -243,53 +293,69 @@ bool touchRead(int16_t& x, int16_t& y)
     return true;
 }
 
-// Gestures are decided on release: a long enough move is a swipe, otherwise a tap where the finger first
-// landed. Holding still for LONG_PRESS_MS sends Back right away, without waiting for the release.
+// Gestures are decided on release: a long enough move is a swipe, otherwise a tap. Holding still for
+// LONG_PRESS_MS sends Back right away, without waiting for the release.
 Input pollTouch(uint32_t now)
 {
     static bool down = false;
-    static uint8_t streak = 0;  // samples disagreeing with `down`
     static uint32_t since = 0;
-    static int16_t startX = 0, startY = 0, lastX = 0, lastY = 0;
-    static bool havePos = false, longSent = false;
+    static int16_t firstX, firstY, tapX, tapY, endX, endY, smoothX, smoothY;
+    static bool longSent = false;
     static uint8_t samples = 0;  // trusted position samples in this press
+    static int32_t sumX = 0, sumY = 0;  // samples from the 3rd on, for the tap position
+    static uint8_t nSum = 0;
+    static uint32_t highSince = 0;
     const Input none = {Ev::None, 0, 0};
 
-    const bool pen = digitalRead(PIN_TOUCH_IRQ) == LOW;  // no SPI traffic while untouched
+    // PENIRQ decides "touched" and is read before any SPI: each conversion pulls it low for a while, so the
+    // chip is only read while it is already low (reading it every poll kept it low forever). A very light
+    // touch does not pull PENIRQ low through its ~50 kOhm pull-up; that is a limit of this panel.
+    const bool pen = digitalRead(PIN_TOUCH_IRQ) == LOW;
     int16_t x, y;
     if (pen && touchRead(x, y)) {
-        // The landing sample is the noisiest: the 2nd one becomes the start, later ones are smoothed.
-        if (samples < 2) {
-            startX = lastX = x;
-            startY = lastY = y;
-            havePos = true;
-            ++samples;
-        } else {
-            lastX = (lastX * 3 + x) / 4;
-            lastY = (lastY * 3 + y) / 4;
+        // Swipes use the raw first/last samples so a quick flick is not shortened by filtering. The first
+        // readings of a press read low on Y while the finger is still pressing in (every tap landed on the
+        // bottom edge), so the tap position is the average from the 3rd sample on, the same way the
+        // calibration was measured. The hold check uses a smoothed position.
+        if (samples == 0) firstX = tapX = smoothX = x, firstY = tapY = smoothY = y;
+        if (samples >= 2) {
+            sumX += x;
+            sumY += y;
+            ++nSum;
+            tapX = sumX / nSum;
+            tapY = sumY / nSum;
         }
+        smoothX = (smoothX * 3 + x) / 4;
+        smoothY = (smoothY * 3 + y) / 4;
+        endX = x;
+        endY = y;
+        if (samples < 255) ++samples;
+        if (samples == 4) return {Ev::Press, tapX, tapY};  // finger settled: lets lists highlight right away
     }
-    if (pen == down) {
-        streak = 0;
-    } else if (++streak >= (pen ? 1 : 4)) {  // press counts at once; release needs ~20 ms so a light press can flicker
-        streak = 0;
+    if (pen || !down) highSince = now;
+    // A press counts at once; the release waits TOUCH_RELEASE_MS (time, not poll count, so the loop speed
+    // does not matter).
+    if (pen != down && (pen || now - highSince >= TOUCH_RELEASE_MS)) {
         down = pen;
+        touchActive = down;
         if (down) {
             since = now;
             longSent = false;
         } else {
-            const bool had = havePos;
-            havePos = false;
+            const uint8_t had = samples;
             samples = 0;
-            if (longSent || !had) return none;
-            const int16_t dx = lastX - startX, dy = lastY - startY;
-            if (abs(dx) >= SWIPE_MIN_PX && abs(dx) >= abs(dy)) return {dx < 0 ? Ev::SwipeLeft : Ev::SwipeRight, 0, 0};
-            if (abs(dy) >= SWIPE_MIN_PX) return {dy < 0 ? Ev::SwipeUp : Ev::SwipeDown, 0, 0};
-            return {Ev::Tap, startX, startY};
+            sumX = sumY = nSum = 0;
+            if (longSent || had == 0) return none;  // a light tap may give only 1-2 samples; still a tap
+            // A quick flick travels less before the finger lifts, so it needs a shorter distance.
+            const int16_t minPx = now - since < FLICK_MS ? FLICK_MIN_PX : SWIPE_MIN_PX;
+            const int16_t dx = endX - firstX, dy = endY - firstY;
+            if (abs(dx) >= minPx && abs(dx) >= abs(dy)) return {dx < 0 ? Ev::SwipeLeft : Ev::SwipeRight, 0, 0};
+            if (abs(dy) >= minPx) return {dy < 0 ? Ev::SwipeUp : Ev::SwipeDown, 0, 0};
+            return {Ev::Tap, tapX, tapY};
         }
     }
-    if (down && havePos && !longSent && now - since >= LONG_PRESS_MS && abs(lastX - startX) < TAP_SLOP_PX &&
-        abs(lastY - startY) < TAP_SLOP_PX) {
+    if (down && samples > 0 && !longSent && now - since >= LONG_PRESS_MS && abs(smoothX - tapX) < TAP_SLOP_PX &&
+        abs(smoothY - tapY) < TAP_SLOP_PX) {
         longSent = true;
         return {Ev::Back, 0, 0};
     }
@@ -456,6 +522,25 @@ void selectRow(uint8_t row)
     }
 }
 
+uint8_t rowAt(int16_t y)
+{
+    return y < ROW_TOP ? 0 : min((y - ROW_TOP) / ROW_H, ROW_COUNT - 1);
+}
+
+bool onBack(const Input& in)
+{
+    return in.x < 50 && in.y < 14;
+}
+
+// Show the chosen row for a moment before leaving the list, so the user sees what was picked.
+void confirmRow(uint8_t row)
+{
+    rowCursor = row;
+    redrawNow = true;
+    pendingRow = row;
+    pendingAt = millis() + 200;
+}
+
 void handle(const Input& in)
 {
     const Ev ev = in.ev;
@@ -487,11 +572,19 @@ void handle(const Input& in)
         }
         break;
     case Screen::ModeList:
-        if (ev == Ev::Up || ev == Ev::SwipeDown) rowCursor = (rowCursor + ROW_COUNT - 1) % ROW_COUNT;
-        if (ev == Ev::Down || ev == Ev::SwipeUp) rowCursor = (rowCursor + 1) % ROW_COUNT;
-        if (ev == Ev::Back || ev == Ev::SwipeRight) screen = Screen::Tiles;
-        if (ev == Ev::Ok) selectRow(rowCursor);
-        if (ev == Ev::Tap && in.y >= ROW_TOP) selectRow(min((in.y - ROW_TOP) / ROW_H, ROW_COUNT - 1));
+        if (pendingRow != 0xFF) break;  // a choice is already on its way
+        // All rows fit, so there is no scrolling: touch picks a row directly, swipe right / "< back" leave.
+        if (ev == Ev::Up) rowCursor = (rowCursor + ROW_COUNT - 1) % ROW_COUNT;
+        if (ev == Ev::Down) rowCursor = (rowCursor + 1) % ROW_COUNT;
+        // Only the "< back" corner leaves; the rest of the header counts as the first row, since taps
+        // measured a few px above where people aim (Enjoy taps landed at y 14-18).
+        if (ev == Ev::Back || ev == Ev::SwipeRight || (ev == Ev::Tap && onBack(in))) screen = Screen::Tiles;
+        if (ev == Ev::Press && !onBack(in)) {
+            rowCursor = rowAt(in.y);
+            redrawNow = true;
+        }
+        if (ev == Ev::Ok) confirmRow(rowCursor);
+        if (ev == Ev::Tap && !onBack(in)) confirmRow(rowAt(in.y));
         break;
     case Screen::Power:
         if (ev == Ev::Up || ev == Ev::Down || ev == Ev::SwipeLeft || ev == Ev::SwipeRight) powerCursor ^= 1;
@@ -720,6 +813,10 @@ void drawQuick()
 void drawModeList()
 {
     centerText("Mode", 6, 1, C_DIM);
+    canvas.setTextSize(1);
+    canvas.setTextColor(C_TEXT);
+    canvas.setCursor(6, 6);
+    canvas.print("< back");
     for (uint8_t i = 0; i < ROW_COUNT; ++i) {
         const int16_t y = ROW_TOP + i * ROW_H;
         const uint16_t c = i == 4 ? C_GRAY : MODE_COLOR[i == 0 ? MODE_ENJOY : i == 3 ? MODE_DEMO : MODE_TRAIN];
@@ -753,10 +850,10 @@ void drawPower()
     }
 }
 
-void render()
+// Draws the current state into the canvas; false when nothing should be shown (standby).
+bool drawFrame()
 {
-    if (screen == Screen::Standby) return;
-    const uint32_t start = millis();
+    if (screen == Screen::Standby) return false;
     canvas.fillScreen(C_BG);
     switch (screen) {
     case Screen::Tiles: drawTiles(); break;
@@ -765,12 +862,31 @@ void render()
     case Screen::Power: drawPower(); break;
     case Screen::Standby: break;
     }
-    tftPush();
-    static uint8_t logged = 0;
-    if (logged < 3) {
-        ++logged;
-        Serial.print("frame ms=");
-        Serial.println(millis() - start);
+    return true;
+}
+
+// Waits for uiTask to ask for a frame. The state is only locked while drawing into the canvas, so input
+// keeps being polled during the ~4 ms push.
+void displayTask(void*)
+{
+    for (;;) {
+        dispStage = 1;  // idle, waiting for a frame request
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        const uint32_t start = millis();
+        dispStage = 2;  // waiting for stateLock
+        xSemaphoreTake(stateLock, portMAX_DELAY);
+        dispStage = 3;  // drawing into the canvas
+        const bool show = drawFrame();
+        xSemaphoreGive(stateLock);
+        ++dispFrames;
+        if (!show) continue;
+        tftPush();
+        static uint8_t logged = 0;
+        if (logged < 3) {
+            ++logged;
+            Serial.print("frame ms=");
+            Serial.println(millis() - start);
+        }
     }
 }
 
@@ -786,6 +902,7 @@ void touchTestLoop()
     static uint32_t sumAx = 0, sumAy = 0, lastPush = 0;
     static uint16_t n = 0;
     static int16_t lastX = 0, lastY = 0;
+    static int16_t minAx = 4095, maxAx = 0, minAy = 4095, maxAy = 0;  // whole-screen extent of all strokes
     if (!started) {
         started = true;
         canvas.fillScreen(C_BG);
@@ -805,6 +922,10 @@ void touchTestLoop()
     if (pen && touchRead(x, y)) {
         sumAx += touchAx;
         sumAy += touchAy;
+        minAx = min(minAx, touchAx);
+        maxAx = max(maxAx, touchAx);
+        minAy = min(minAy, touchAy);
+        maxAy = max(maxAy, touchAy);
         ++n;
         lastX = x;
         lastY = y;
@@ -820,6 +941,8 @@ void touchTestLoop()
         snprintf(line, sizeof(line), "cal ax=%lu ay=%lu n=%u -> %d,%d", static_cast<unsigned long>(sumAx / n),
                  static_cast<unsigned long>(sumAy / n), n, lastX, lastY);
         Serial.println(line);
+        snprintf(line, sizeof(line), "range ax=%d..%d ay=%d..%d", minAx, maxAx, minAy, maxAy);
+        Serial.println(line);
         canvas.fillCircle(lastX, lastY, 3, C_RED);
         tftPush();
         sumAx = sumAy = n = 0;
@@ -832,6 +955,8 @@ void touchTestLoop()
 void setup()
 {
     Serial.begin(115200);
+    stateLock = xSemaphoreCreateMutex();
+    spiLock = xSemaphoreCreateMutex();
     for (Button& b : buttons) pinMode(b.pin, INPUT_PULLUP);
     pinMode(PIN_TOUCH_IRQ, INPUT_PULLUP);
     pinMode(PIN_TOUCH_CS, OUTPUT);
@@ -845,34 +970,84 @@ void setup()
     Serial.println("tft_card_ui ready: swipe/tap or Up/Down/OK, hold = back");
     Serial.print("PEN (D15) idle level = ");  // must be 1 without touching, else the pin is not working as GPIO
     Serial.println(digitalRead(PIN_TOUCH_IRQ));
+    // Input runs above the display so a frame push never delays a touch poll.
+    if (stateLock == nullptr || spiLock == nullptr ||
+        xTaskCreate(displayTask, "display", 2048, nullptr, 2, &displayTaskHandle) != pdPASS ||
+        xTaskCreate(uiTask, "ui", 2048, nullptr, 3, nullptr) != pdPASS) {
+        Serial.println("task create failed; halting");
+        while (1) {
+        }
+    }
+}
+
+// Input, state changes and the fake data clock; polls about every 1 ms (light taps hold PENIRQ ~40 ms).
+void uiTask(void*)
+{
+    if (TOUCH_TEST) {
+        for (;;) touchTestLoop();
+    }
+    uint32_t lastTick = millis(), lastButtons = 0;
+    xTaskNotifyGive(displayTaskHandle);  // first frame
+    for (;;) {
+        const uint32_t now = millis();
+        ++uiLoops;
+        uiStage = 1;  // buttons
+        Input in = {Ev::None, 0, 0};
+        if (now - lastButtons >= 5) {  // 4-sample debounce stays ~20 ms however fast the poll runs
+            lastButtons = now;
+            in.ev = pollButtons(now);
+        }
+        uiStage = 2;  // touch
+        if (in.ev == Ev::None && screen != Screen::Standby) in = pollTouch(now);  // standby: only long OK wakes
+        uiStage = 3;  // event log
+        if (in.ev != Ev::None && in.ev != Ev::Press) {  // Press precedes every tap; logging it is just noise
+            Serial.print("event ");
+            Serial.print(EV_NAME[static_cast<uint8_t>(in.ev)]);
+            if (in.ev == Ev::Tap) {
+                Serial.print(" at ");
+                Serial.print(in.x);
+                Serial.print(",");
+                Serial.print(in.y);
+            }
+            Serial.println();
+        }
+        uiStage = 4;  // waiting for stateLock
+        xSemaphoreTake(stateLock, portMAX_DELAY);
+        uiStage = 5;  // handle / tick
+        if (in.ev != Ev::None) handle(in);
+        if (pendingRow != 0xFF && static_cast<int32_t>(now - pendingAt) >= 0) {
+            Serial.print("select ");
+            Serial.println(ROW_LABEL[pendingRow]);
+            selectRow(pendingRow);
+            pendingRow = 0xFF;
+            dirty = true;
+        }
+        if (now - lastTick >= 100) {
+            tick(now - lastTick, now);
+            lastTick = now;
+        }
+        const bool redraw = dirty && (!touchActive || redrawNow);
+        if (redraw) dirty = redrawNow = false;
+        xSemaphoreGive(stateLock);
+        if (redraw) xTaskNotifyGive(displayTaskHandle);
+        uiStage = 6;  // sleeping
+        vTaskDelay(1);
+    }
+}
+
+const char* holderName(SemaphoreHandle_t lock)
+{
+    TaskHandle_t holder = xSemaphoreGetMutexHolder(lock);
+    return holder ? pcTaskGetName(holder) : "-";
 }
 
 void loop()
 {
-    if (TOUCH_TEST) return touchTestLoop();
-    static uint32_t lastTick = millis();
-    const uint32_t now = millis();
-    Input in = {pollButtons(now), 0, 0};
-    if (in.ev == Ev::None && screen != Screen::Standby) in = pollTouch(now);  // standby: only long OK wakes
-    if (in.ev != Ev::None) {
-        Serial.print("event ");
-        Serial.print(EV_NAME[static_cast<uint8_t>(in.ev)]);
-        if (in.ev == Ev::Tap) {
-            Serial.print(" at ");
-            Serial.print(in.x);
-            Serial.print(",");
-            Serial.print(in.y);
-        }
-        Serial.println();
-        handle(in);
-    }
-    if (now - lastTick >= 100) {
-        tick(now - lastTick, now);
-        lastTick = now;
-    }
-    if (dirty) {
-        dirty = false;
-        render();
-    }
-    delay(5);
+    vTaskDelay(pdMS_TO_TICKS(1000));  // all work runs in uiTask and displayTask
+    // temporary freeze diagnosis: if ui/disp stop counting, the stage and lock holders show where they stopped
+    char line[112];
+    snprintf(line, sizeof(line), "hb ui=%lu stage=%u disp=%lu stage=%u stateLock=%s spiLock=%s spiState=%lu",
+             static_cast<unsigned long>(uiLoops), uiStage, static_cast<unsigned long>(dispFrames), dispStage,
+             holderName(stateLock), holderName(spiLock), static_cast<unsigned long>(spi_obj1.state));
+    Serial.println(line);
 }
