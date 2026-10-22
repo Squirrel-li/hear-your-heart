@@ -75,7 +75,7 @@
 - `bpm_tempo.h`（2026-10-22 取代 MiniBPM）：log-mel 頻譜差 onset 曲線（全頻＋4 頻帶）→ 自相關與傅立葉週期分布 → 約 25 個候選 → 300 棵梯度提升樹（`bpm_tempo_model.h`）打分取最高。模型以 GTZAN、Ballroom、GiantSteps Tempo、ISMIR04 Songs 共 2824 首訓練；重新訓練用 `firmware/hub8735-ultra/tools/bpm_tempo/`（`dump.cpp` 用同一份 `bpm_tempo.h` 在電腦上算特徵，`train.py` 匯出模型）。2026-10-22 起特徵改用與 HUB 相同的 Helix 解碼計算（先前用 minimp3）。保留測試集 1404 首（Helix 特徵）：直接正確 75.4%（MiniBPM 56.8%），含 x2／/2 可修正 90.5%（MiniBPM 76.1%）；<70 BPM 的可修正率最低（68%）。板上實測（CMSIS FFT）：60 秒音訊約 12 秒、20～34 秒音訊 3～6 秒；SD 卡 42 首測試曲取自保留測試集，且不參與最終模型訓練（模型以其餘 2782 首訓練），只作驗證：直接正確 26、含 x2／/2 可修正 34（MiniBPM 19／31）；每首開頭丟 3 個 frame 後，42 首 PCM 雜湊與電腦版 Helix 完全相同。每首的 timing log 附 `pcm <雜湊>/<樣本數>`，可與 `dump.cpp -DDUMP_ESTIMATE`（電腦端改用同一個 Helix 解碼）比對解碼是否一致。
 - 新檔／未知 BPM 包含未列入清單、BPM 為 0、缺少舊檔案資訊，或檔案大小／FAT 修改時間有變更的曲目。BPM 為 0 的曲目不參加自動選曲。分析成功後以整數 BPM 更新清單；失敗曲目不阻擋其他曲目。
 - 取代檔案依大小與 FAT 修改時間判斷。相同大小和時間戳記的內容替換可能漏檢；若需嚴格保證，應升級為內容指紋比對。
-- BPM 分析選單已接入 NPU 曲風分類：BPM 階段後由 MusicGenreClassifier 呼叫 SDK YAMNet，將曲風存入 `music_library.json`。有有效 BPM 即可參加自動選曲，曲風分析失敗不阻擋。未來可新增使用者的「期望曲風」選項；目前選曲只依 BPM。
+- BPM 分析選單已接入 NPU 曲風分類：BPM 階段後由 MusicGenreClassifier 以 NPU 執行自訓五類 YAMNet（`tools/yamnet_genre/models/yamnet_c5u11_fp16.nb`，複製到 SD 卡 `NN_MDL/yamnet.nb`，Arduino 選單 LoadNNModelSource 須選 SD Card），取約 15 秒音訊、各視窗 softmax 平均後取最高者（Classical／Electronic／Hip-Hop／Rock／Other），存入 `music_library.json`；每首前 2 個視窗含上一首殘留樣本而不計分。尚未實機驗證。有有效 BPM 即可參加自動選曲，曲風分析失敗不阻擋。未來可新增使用者的「期望曲風」選項；目前選曲只依 BPM。
 ## 離線 BPM 估計
 
 原有 10 首（`testdata/audio` 的 `music1`～`music10`）用 FFmpeg 將 MP3 解碼，對各曲目前約 180 秒的音訊做頻譜起音強度與自相關分析，再檢查三段各 60 秒的候選節拍。另 6 首是 FMA 資料集（fma_small，CC BY-NC-SA）的 30 秒片段，BPM 取自 Echonest 的 `tempo`（四捨五入，未在此量測）。這些數值都是**估計值**，節奏可能有半拍／雙拍解讀；換 SD 卡曲目或進行正式展示前，應人工核對。

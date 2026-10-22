@@ -34,26 +34,17 @@ constexpr unsigned FRAMES_PER_STEP = 8;
 constexpr unsigned MAX_OPERATIONS_PER_STEP = 64;
 constexpr uint32_t MAX_DECODE_ERRORS = 200;
 
-constexpr int GENRE_FIRST = 211;  // YAMNet 曲風類別 Pop music .. Independent music
-constexpr int GENRE_LAST = 260;
-
-// 索引 = class id - 211；標籤須 < MUSIC_GENRE_MAX。
-const char* const GENRE_LABELS[GENRE_LAST - GENRE_FIRST + 1] = {
-    "Pop", "Hip-Hop", "Beatboxing", "Rock", "Metal", "Punk", "Grunge", "Prog Rock",
-    "Rock and Roll", "Psychedelic", "R&B", "Soul", "Reggae", "Country", "Swing",
-    "Bluegrass", "Funk", "Folk", "Middle Eastern", "Jazz", "Disco", "Classical",
-    "Opera", "Electronic", "House", "Techno", "Dubstep", "Drum and Bass",
-    "Electronica", "EDM", "Ambient", "Trance", "Latin", "Salsa", "Flamenco",
-    "Blues", "Children", "New Age", "Vocal", "A Cappella", "African", "Afrobeat",
-    "Christian", "Gospel", "Asian", "Carnatic", "Bollywood", "Ska", "Traditional",
-    "Indie",
-};
+// 自訓 c5u11 模型（tools/yamnet_genre，SD 上的 NN_MDL/yamnet.nb）的 softmax 輸出順序；標籤須 < MUSIC_GENRE_MAX。
+constexpr int GENRE_COUNT = 5;
+const char* const GENRE_LABELS[GENRE_COUNT] = {"Classical", "Electronic", "Hip-Hop", "Rock", "Other"};
+// SDK 前處理的輸入緩衝跨歌曲保留，每首前 2 個視窗含上一首（或開機時的靜音）樣本，不計分。
+constexpr uint32_t WARMUP_WINDOWS = 2;
 
 // NN 結果 callback 在 NN 的 task 上執行；audioTask 只讀取。
-volatile uint32_t windowCount = 0;
+volatile uint32_t windowCount = 0;   // 含 warm-up 視窗
 volatile uint32_t lastWindowMs = 0;
-volatile float genreScore[GENRE_LAST - GENRE_FIRST + 1];  // 各視窗機率（0..1）累加
-constexpr float MIN_MEAN_PROB = 0.05f;  // 平均機率低於此值視為沒有明確曲風
+volatile uint32_t badOutputSize = 0;  // 模型輸出類別數不是 5（SD 上放錯模型）
+volatile float genreScore[GENRE_COUNT];  // 計分視窗的機率（0..1）累加
 
 float halfToFloat(uint16_t h)
 {
@@ -66,23 +57,21 @@ float halfToFloat(uint16_t h)
     return (h & 0x8000) ? -value : value;
 }
 
-// SDK 的 yamnet_postprocess 只保留機率 > 0.5 的類別，曲風機率通常更低。
-// 因此包一層：先從模型原始輸出（fp16，每類一個機率）累計曲風機率，再交給原本的後處理。
-// 在 NN 的 task 上執行；audioTask 只讀取。
-extern "C" int yamnet_postprocess(void* tensorOut, nn_tensor_param_t* param, void* res);
-
+// 取代 SDK 的 yamnet_postprocess（521 類、只留機率 > 0.5）：直接累計模型原始輸出（fp16 softmax）。
+// 不產生 SDK 結果（回傳 0 筆），曲風由 streamStep 取平均後決定。在 NN 的 task 上執行。
 int genrePostprocess(void* tensorOut, nn_tensor_param_t* param, void* res)
 {
+    (void)res;
     const uint16_t* probs = tensorOut != nullptr ? *static_cast<const uint16_t* const*>(tensorOut) : nullptr;
-    if (probs != nullptr && param != nullptr &&
-        param->dim[0].size[0] > static_cast<uint32_t>(GENRE_LAST)) {
-        for (int id = GENRE_FIRST; id <= GENRE_LAST; ++id) {
-            genreScore[id - GENRE_FIRST] += halfToFloat(probs[id]);
-        }
-        ++windowCount;
-        lastWindowMs = millis();
+    if (probs == nullptr || param == nullptr) return 0;
+    if (param->dim[0].size[0] != static_cast<uint32_t>(GENRE_COUNT)) {
+        ++badOutputSize;
+    } else if (windowCount >= WARMUP_WINDOWS) {
+        for (int i = 0; i < GENRE_COUNT; ++i) genreScore[i] += halfToFloat(probs[i]);
     }
-    return yamnet_postprocess(tensorOut, param, res);
+    ++windowCount;
+    lastWindowMs = millis();
+    return 0;
 }
 
 // 包住 SDK 的 array_module，讓 RAM 中的 PCM 像麥克風一樣接到 StreamIO。
@@ -317,7 +306,8 @@ bool MusicGenreClassifier::startStreaming()
 {
     windowCount = 0;
     lastWindowMs = 0;
-    for (size_t i = 0; i < sizeof(genreScore) / sizeof(genreScore[0]); ++i) genreScore[i] = 0;
+    badOutputSize = 0;
+    for (int i = 0; i < GENRE_COUNT; ++i) genreScore[i] = 0;
 
     // 模型來源由 Arduino 選單 LoadNNModelSource 決定（此處設為 SD）。掃描期間只開一次。
     if (!nnStarted) {
@@ -355,22 +345,21 @@ MusicGenreClassifier::StepResult MusicGenreClassifier::streamStep(char genre[MUS
     const bool idle = windows > 0 && now - lastWindowMs > STREAM_IDLE_MS;
     if (elapsed < STREAM_TIMEOUT_MS && !idle) return StepResult::InProgress;
 
-    if (windows == 0) return fail("NN produced no output");
+    if (badOutputSize > 0) return fail("model output is not 5 genres (wrong NN_MDL/yamnet.nb?)");
+    if (windows <= WARMUP_WINDOWS) return fail("NN produced too few windows");
 
-    int best = -1;
-    float bestScore = 0.0f;
-    for (int i = 0; i <= GENRE_LAST - GENRE_FIRST; ++i) {
-        if (genreScore[i] > bestScore) {
-            bestScore = genreScore[i];
-            best = i;
-        }
+    // 與離線評估相同：各視窗 softmax 取平均，取最高者。
+    const uint32_t scored = windows - WARMUP_WINDOWS;
+    int best = 0;
+    int percent[GENRE_COUNT];
+    for (int i = 0; i < GENRE_COUNT; ++i) {
+        percent[i] = static_cast<int>(genreScore[i] / scored * 100.0f + 0.5f);
+        if (genreScore[i] > genreScore[best]) best = i;
     }
-    const int meanPercent = best >= 0 ? static_cast<int>(bestScore / windows * 100.0f + 0.5f) : 0;
-    const char* label = best >= 0 && bestScore / windows >= MIN_MEAN_PROB
-        ? GENRE_LABELS[best] : GENRE_UNKNOWN;
-    LOGI(TAG, "%lu windows in %lu ms -> %s (top %s, mean %d%%)", static_cast<unsigned long>(windows),
-         static_cast<unsigned long>(elapsed), label, best >= 0 ? GENRE_LABELS[best] : "-", meanPercent);
-    strncpy(genre, label, MUSIC_GENRE_MAX - 1);
+    LOGI(TAG, "%lu windows in %lu ms -> %s (Classical %d%%, Electronic %d%%, Hip-Hop %d%%, Rock %d%%, Other %d%%)",
+         static_cast<unsigned long>(scored), static_cast<unsigned long>(elapsed), GENRE_LABELS[best],
+         percent[0], percent[1], percent[2], percent[3], percent[4]);
+    strncpy(genre, GENRE_LABELS[best], MUSIC_GENRE_MAX - 1);
     genre[MUSIC_GENRE_MAX - 1] = '\0';
     cancel();
     return StepResult::Complete;
