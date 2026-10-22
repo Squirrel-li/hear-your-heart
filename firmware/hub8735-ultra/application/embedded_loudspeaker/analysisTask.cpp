@@ -2,6 +2,7 @@
 
 #include "localSensor.h"
 #include "motion_level.h"
+#include "ppg_raw_hr.h"
 
 namespace {
 
@@ -113,6 +114,11 @@ void analysisTask(void* parameter)
     bool wasFresh = false;
     uint8_t lastZoneSeen = 0;
     bool wasStandby = false;
+    // 0x05 原始 PPG：HUB 自算心率。有效結果優先於 0x01 封包內的心率，結果失效或逾時才改用 0x01。
+    static PpgRawHrState rawHr;  // static：不佔 4 KB task stack
+    ppg_raw_hr_reset(rawHr);
+    uint8_t rawBpm = 0;
+    uint32_t rawBpmMs = 0;
     localSensorInit();  // 預設來源是胸帶，本地感測器保持關閉
 
     for (;;) {
@@ -141,6 +147,9 @@ void analysisTask(void* parameter)
                 // 新來源尚無有效心率；目標 BPM 沿用最後值，Zone 變更重新計時。
                 haveValidPpg = false;
                 zoneState.pending = 0;
+                xQueueReset(ppgRawQueue);
+                ppg_raw_hr_reset(rawHr);
+                rawBpm = 0;
             }
         }
 
@@ -156,12 +165,39 @@ void analysisTask(void* parameter)
                 LOGE("ANALYSIS", "local IMU re-enable failed after wake");
             }
             haveValidPpg = false;  // 喚醒後等新的有效心率；目標 BPM 沿用最後值
+            ppg_raw_hr_reset(rawHr);
+            rawBpm = 0;
         }
 
         localSensorPoll();  // 選了本地來源才會有資料；樣本與 BLE 走同一組 queue
 
+        PpgRawElement raw{};
+        while (xQueueReceive(ppgRawQueue, &raw, 0) == pdPASS) {
+            const int bpm = ppg_raw_hr_feed(rawHr, raw.sensor_time_ms, raw.ppg1, raw.ppg2);
+            if (bpm < 0) continue;
+            LOGI("ANALYSIS", "HUB raw PPG cycle: HR=%d (ch1=%u ch2=%u)%s", bpm, static_cast<unsigned>(rawHr.hr.last_b1),
+                 static_cast<unsigned>(rawHr.hr.last_b2), bpm == 0 ? ", invalid -> 0x01 heart rate used" : "");
+            rawBpm = static_cast<uint8_t>(bpm);
+            if (bpm == 0) continue;
+            rawBpmMs = raw.hub_rx_time_ms;
+            latest = PpgSensorElement{};
+            latest.hub_rx_time_ms = raw.hub_rx_time_ms;
+            latest.sensor_time_ms = raw.sensor_time_ms;
+            latest.sequence = raw.sequence;
+            latest.status = 2;
+            latest.heartRateBpm = rawBpm;
+            if (!haveValidPpg) LOGI("ANALYSIS", "heart rate valid (HUB raw HR=%u)", static_cast<unsigned>(rawBpm));
+            haveValidPpg = true;
+        }
+        const bool rawHrActive = rawBpm != 0 && (uint32_t)(millis() - rawBpmMs) <= 15000u;
+
         PpgSensorElement sample{};
         while (xQueueReceive(ppgSensorQueue, &sample, 0) == pdPASS) {
+            if (rawHrActive) {
+                LOGT("ANALYSIS", "PPG HR=%u ignored: HUB raw HR %u in use", static_cast<unsigned>(sample.heartRateBpm),
+                     static_cast<unsigned>(rawBpm));
+                continue;
+            }
             const bool valid = sample.status == 2 && sample.heartRateBpm != 0;
             LOGT("ANALYSIS", "PPG recv: HR=%u status=%u sequence=%lu valid=%d", static_cast<unsigned>(sample.heartRateBpm),
                  static_cast<unsigned>(sample.status), static_cast<unsigned long>(sample.sequence), valid ? 1 : 0);

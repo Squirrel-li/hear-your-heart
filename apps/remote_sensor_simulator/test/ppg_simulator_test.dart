@@ -9,10 +9,10 @@ void main() {
   test('loads PPG (0x01) and combined acc+gyro (0x02) frames in protocol format', () async {
     final dataSets = await PpgDataLoader.load(rootBundle.loadString);
 
-    expect(dataSets, hasLength(9));
+    expect(dataSets, hasLength(10));
     expect(dataSets.first.frames, hasLength(51));
     var step = 0;
-    for (final dataSet in dataSets) {
+    for (final dataSet in dataSets.where((d) => d.frames.first.type != 0x05)) {
       final type = dataSet.frames.first.type;
       final length = type == 0x01 ? 20 : 21;
       step = type == 0x01 ? 5000 : 1000;
@@ -62,6 +62,34 @@ void main() {
     expect(nextImu.bytes[4], 0x02);
     expect(nextImu.timestamp, lastImu!.timestamp + 1000);
     expect(nextImu.sequence, lastImu.sequence + 1);
+  });
+
+  test('loads PPG raw batch (0x05) and counts sequence by samples', () async {
+    final dataSets = await PpgDataLoader.load(rootBundle.loadString);
+    final raw = dataSets.last;
+    expect(raw.frames.first.type, 0x05);
+    expect(raw.frames, hasLength(1253));
+    for (var i = 0; i < raw.frames.length; i++) {
+      expect(raw.frames[i].bytes.length, 18);
+      expect(raw.frames[i].samples, 2);
+      expect(raw.frames[i].sequence, i * 2);
+    }
+
+    final cursor = PpgCursor(raw)..source = 1;
+    PpgPayload? last;
+    for (var i = 0; i < raw.frames.length; i++) {
+      last = cursor.peek(loop: true);
+      cursor.advance(loop: true);
+    }
+    final next = cursor.peek(loop: true)!;
+    expect(next.bytes[4], 0x15);
+    expect(next.sequence, last!.sequence + 2);
+  });
+
+  test('rejects 0x05 frames whose length is not 10 + 4N', () {
+    const source = PpgSource('bad', 'x');
+    expect(() => PpgDataLoader.parse(source, '00 00 00 38 05 00 00 00 00 01 0A 0E 0F'), throwsFormatException);
+    expect(() => PpgDataLoader.parse(source, '00 00 00 38 05 00 00 00 00 01'), throwsFormatException);
   });
 
   test('switching dataset resets cursor position and loop offsets', () async {
