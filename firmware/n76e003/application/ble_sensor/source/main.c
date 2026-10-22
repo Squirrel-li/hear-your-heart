@@ -108,8 +108,15 @@ unsigned char _sdcc_external_startup(void)
 }
 
 /*============================== configuration ==============================*/
+#if defined(ITAP_CAPTURE) || defined(ITAP_MOTION_HR)
+#define ITAP_FAST_SENSOR 1
+#endif
 #define BM_BAUD             115200
+#ifdef ITAP_CAPTURE
+#define BM_NAME             "BLE_capture_ITAP"
+#else
 #define BM_NAME             "BLE_watch_ITAP"    /* BLE device name, 1..31 ASCII bytes, set at every boot; the HUB tells chest/watch apart by name */
+#endif
 #define USE_HIRC_166        1       /* 1 = Fsys 16.6 MHz (accurate 115200), 0 = 16 MHz */
 #define RESET_LOW_MS        100     /* RST_N low time, spec > 5 ms (UART1 test uses 100 ms) */
 #define BOOT_WAIT_MS        100     /* spec: 60 ms after RST_N 0->1                          */
@@ -135,7 +142,11 @@ unsigned char _sdcc_external_startup(void)
                                     /* continuous upload mode; in ask-response mode (0x02/03) it sends no 55 B0 */
                                     /* frames by itself.                                                        */
 
+#ifdef ITAP_FAST_SENSOR
+#define USE_OLED            0       /* dedicate I2C/main-loop time to acquisition */
+#else
 #define USE_OLED            1       /* 0 = skip the OLED (to rule it out when debugging)      */
+#endif
 #define OLED_ADDR           0x78    /* 8-bit I2C address                                     */
 #define OLED_I2CLK          13      /* I2C clock = Fsys / (4 * (13 + 1)) ~ 296 kHz           */
 #define OLED_TMO_MS         5       /* I2C SI wait limit (bus stuck / no pull-up)            */
@@ -540,7 +551,11 @@ static void bm_notify_send(UINT8 *dat, UINT8 len)                  /* len > 20 n
 #define SENSOR_CMD          0x00            /* reserved: command frame, payload not defined yet */
 #define SENSOR_SRC          0x10            /* high nibble = source: 1 = watch (chest sends 0) */
 #define SENSOR_PPG          (SENSOR_SRC | 0x01)
+#ifdef ITAP_FAST_SENSOR
+#define SENSOR_IMU          (SENSOR_SRC | 0x03) /* capture sends acc only, fits default MTU */
+#else
 #define SENSOR_IMU          (SENSOR_SRC | 0x02) /* acc + gyro in one frame */
+#endif
 #define SENSOR_ACC          0x03            /* separate acc / gyro frames: not sent by this firmware, */
 #define SENSOR_GYRO         0x04            /* defined in the protocol for other senders              */
 #define PKT_LEN             20
@@ -558,6 +573,60 @@ __bit   ppg_cap;
 UINT8 ppg_i     = 0;                        /* byte index in the 15-byte module frame */
 UINT8 ppg_sum   = 0;
 UINT8 ppg_seq[4] = { 0, 0, 0, 0 };          /* Big-endian, counts every valid module frame */
+
+#ifdef ITAP_MOTION_HR
+#include "../../ble_sensor_hr/source/ppg_motion_hr.h"
+__xdata motion_hr motion;
+__xdata UINT8 motion_pkt[PKT_LEN];
+__bit motion_has, motion_ready;
+__bit motion_seen;
+UINT8 motion_sequence = 0;
+UINT16 motion_acc_sent = 0;
+static void motion_task(void)
+{
+    UINT8 k, previous;
+    if (!ppg_ready) return;
+    previous = motion.bpm;
+    /* Low byte suffices within a <100ms gap; long gaps reset in mh_ppg. */
+    if (motion_seen && (UINT8)(tx_pkt[8] - motion_sequence) != 1) mh_reset(&motion, 1);
+    motion_sequence = tx_pkt[8]; motion_seen = 1;
+    if (mh_ppg(&motion, ((UINT16)tx_pkt[16] << 8) | tx_pkt[17],
+               ((UINT16)tx_pkt[18] << 8) | tx_pkt[19],
+               ((UINT16)tx_pkt[2] << 8) | tx_pkt[3], tx_pkt[9])) motion_ready = 1;
+    if (previous && !motion.bpm) motion_ready = 1; /* report loss of validity promptly */
+    for (k = 0; k < PKT_LEN; k++) motion_pkt[k] = tx_pkt[k];
+    motion_pkt[11] = motion.bpm;
+    motion_pkt[9] = motion.bpm ? 2 : (tx_pkt[9] ? 1 : 0);
+    motion_has = 1;
+    ppg_ready = 0;
+}
+#endif
+
+#ifdef ITAP_CAPTURE
+/* ponytail: four main-loop slots absorb short ACK stalls, not a slow link.
+ * Overflow discards the incoming frame; the transmitted sequence exposes it.
+ * ISR keeps its original atomic single-slot handoff. */
+__xdata UINT8 capture_ppg[4][PKT_LEN];
+UINT8 capture_head = 0, capture_tail = 0, capture_count = 0;
+__bit capture_acc_turn;
+static void capture_collect(void)
+{
+    UINT8 k;
+    if (!ppg_ready) return;
+    if (capture_count < 4) {
+        for (k = 0; k < PKT_LEN; k++) capture_ppg[capture_head][k] = tx_pkt[k];
+        capture_head = (capture_head + 1) & 3;
+        capture_count++;
+    }
+    ppg_ready = 0;
+}
+static void capture_send(void)
+{
+    bm_notify_send(capture_ppg[capture_tail], PKT_LEN);
+    capture_tail = (capture_tail + 1) & 3;
+    capture_count--;
+}
+#endif
 
 void SerialPort0_ISR(void) __interrupt (4)
 {
@@ -640,10 +709,14 @@ static void UART0_Init(void)
 /* boards keeps it: the mode is read first and written back only when it differs. The timed upload     */
 /* interval (EEPROM 0x0A) is left as it is. A write takes 50 ms and no command may follow during that   */
 /* time; other commands need 6 ms.                                                                      */
+#ifdef ITAP_FAST_SENSOR
+#define PPG_MODE_VALUE      0x04       /* continuous waveform upload */
+#else
 #define PPG_MODE_VALUE      0x00
+#endif
 #define PPG_REPLY_MS        100
 __code UINT8 ppg_read_cmd[8]  = { 0x55, 0xB1, 0x05, 0x01, 0x00, 0x00, 0xB7, 0xAA };   /* read EEPROM 0x01 */
-__code UINT8 ppg_mode_cmd[8]  = { 0x55, 0xB1, 0x04, 0x01, 0x00, 0x00, 0xB6, 0xAA };   /* EEPROM 0x01 = 0x0000 */
+__code UINT8 ppg_mode_cmd[8]  = { 0x55, 0xB1, 0x04, 0x01, 0x00, PPG_MODE_VALUE, (UINT8)(0xB6 + PPG_MODE_VALUE), 0xAA };
 __code UINT8 ppg_stop_cmd[8]  = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x01, 0xB3, 0xAA };
 __code UINT8 ppg_start_cmd[8] = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x00, 0xB2, 0xAA };
 __code UINT8 ppg_read_hdr[4]  = { 0x55, 0xB1, 0x05, 0x01 };
@@ -709,8 +782,13 @@ static void ppg_start(void)
 
 static void ppg_send(void)
 {
+#ifdef ITAP_MOTION_HR
+    bm_notify_send(motion_pkt, PKT_LEN);
+    motion_has = motion_ready = 0;
+#else
     bm_notify_send(tx_pkt, PKT_LEN);        /* blocking: tx_pkt is fully sent on return */
     ppg_ready = 0;
+#endif
 }
 
 /*============================== SH1106 OLED (I2C0, polled) ================*/
@@ -725,7 +803,9 @@ __bit  disp_ok;                             /* a sample has been received       
 __bit  ppg_ok;                              /* ... and it is recent                  */
 
 __xdata char ln[OLED_COLS + 1];             /* row being built                       */
+#ifndef ITAP_MOTION_HR
 __xdata char ln_cache[OLED_ROWS][OLED_COLS];/* text currently on the screen          */
+#endif
 UINT8  ln_n;
 __xdata char ln_dig[5];
 UINT8  oled_row  = 0;
@@ -822,6 +902,7 @@ static void i2c_stop(void)
         }
 }
 
+#ifndef ITAP_MOTION_HR
 static __bit oled_begin(UINT8 ctrl)                /* ctrl 0x00 = commands, 0x40 = data */
 {
     return i2c_start() && i2c_tx(OLED_ADDR, 0x18) && i2c_tx(ctrl, 0x28);
@@ -927,6 +1008,7 @@ static void ln_time(UINT32 ms)              /* "mmMssS" since power-up, minutes 
     ln_c('s');
 }
 
+#endif
 static UINT32 uptime_ms(void)
 {
     UINT32 t;
@@ -940,7 +1022,11 @@ static UINT32 uptime_ms(void)
 /* Read once per IMU_PERIOD_MS, sent as one acc+gyro frame (msgType 0x12, ble-notify-data-format.md */
 /* section 5) and shown on the IMU page. Accel +-8 g, gyro +-1000 dps, both ODR 12.5 Hz.          */
 #define IMU_ADDR            0xD6            /* 8-bit address, SA0 = VCC (7-bit 0x6B) */
+#ifdef ITAP_FAST_SENSOR
+#define IMU_PERIOD_MS       2               /* poll XLDA; new samples at hardware 26 Hz */
+#else
 #define IMU_PERIOD_MS       1000            /* 1 Hz */
+#endif
 #define IMU_PKT_LEN         21              /* needs MTU >= 24 (default 23 carries only 20 B) */
 #define IMU_PKT_SEQ         5
 #define IMU_PKT_ACC         9               /* acc x y z: int16 Big-endian */
@@ -999,6 +1085,15 @@ static void imu_init(void)
     imu_has = 0;
     i2c_bus_init();
     if (!imu_read(LSM_WHO_AM_I, &id, 1) || (id != 0x69 && id != 0x6A)) return;
+#ifdef ITAP_FAST_SENSOR
+    if (imu_write(LSM_CTRL3_C, 0x44) &&    /* BDU + auto-increment */
+        imu_write(LSM_CTRL4_C, 0x00) &&
+        imu_write(LSM_TAP_CFG, 0x00) &&    /* retain gravity; host removes baseline */
+        imu_write(LSM_CTRL8_XL, 0x00) &&
+        imu_write(LSM_CTRL2_G, 0x00) &&    /* gyro off */
+        imu_write(LSM_CTRL1_XL, 0x2C))    /* 26 Hz, +/-8 g */
+        imu_ok = 1;
+#else
     if (imu_write(LSM_CTRL3_C,  0x44) &&    /* BDU, auto-increment */
         imu_write(LSM_CTRL4_C,  0x80) &&    /* XL_BW_SCAL_ODR: anti-alias BW from BW_XL (high-perf mode only) */
         imu_write(LSM_TAP_CFG,  0x10) &&    /* SLOPE_FDS: enable the accel HP / LPF2 filters, without it the HP path outputs 0 */
@@ -1007,6 +1102,7 @@ static void imu_init(void)
         imu_write(LSM_CTRL1_XL, 0x1F) &&    /* 12.5 Hz, +-8 g, anti-alias BW 50 Hz */
         imu_write(LSM_CTRL2_G,  0x18))      /* 12.5 Hz, +-1000 dps */
         imu_ok = 1;
+#endif
 }
 
 static void imu_task(void)
@@ -1023,14 +1119,28 @@ static void imu_task(void)
         if (!imu_ok) imu_skip = 1;          /* init failed: give up until the next power-up */
         return;
     }
+#ifdef ITAP_FAST_SENSOR
+    if (!imu_read(0x1E, imu_raw, 1)) { imu_ok = 0; return; }
+    if (!(imu_raw[0] & 1)) return;          /* never upload repeated old samples */
+    up = uptime_ms();                      /* readout time, <= polling jitter from DRDY */
+    if (!imu_read(0x28, &imu_raw[6], 6))
+#else
     if (!imu_read(LSM_OUTX_L_G, imu_raw, 12))
+#endif
     {
         imu_ok  = 0;                        /* re-init next period */
         imu_has = 0;
         return;
     }
 
+#ifndef ITAP_FAST_SENSOR
     up = uptime_ms();
+#endif
+#ifdef ITAP_MOTION_HR
+    mh_acc(&motion, (int16_t)(((UINT16)imu_raw[7] << 8) | imu_raw[6]),
+           (int16_t)(((UINT16)imu_raw[9] << 8) | imu_raw[8]),
+           (int16_t)(((UINT16)imu_raw[11] << 8) | imu_raw[10]), (UINT16)up);
+#endif
     imu_pkt[0] = (UINT8)(up >> 24);
     imu_pkt[1] = (UINT8)(up >> 16);
     imu_pkt[2] = (UINT8)(up >> 8);
@@ -1051,10 +1161,15 @@ static void imu_task(void)
 
 static void imu_send(void)
 {
+#ifdef ITAP_FAST_SENSOR
+    bm_notify_send(imu_pkt, 15);
+#else
     bm_notify_send(imu_pkt, IMU_PKT_LEN);
+#endif
     imu_ready = 0;
 }
 
+#ifndef ITAP_MOTION_HR
 static int imu_val(UINT8 i)                 /* i: 0..2 accel XYZ, 3..5 gyro XYZ */
 {
     __xdata UINT8 *p = imu_pkt + (i < 3 ? IMU_PKT_ACC : IMU_PKT_GYRO) + 2 * (i % 3);
@@ -1212,6 +1327,7 @@ static void oled_task(UINT8 state)
     oled_row = (oled_row + 1) & (OLED_ROWS - 1);
 }
 
+#endif
 /*============================== main =======================================*/
 void main(void)
 {
@@ -1242,6 +1358,9 @@ void main(void)
     set_EA;
 
     t_state = now_ms();
+#ifdef ITAP_MOTION_HR
+    mh_reset(&motion, 1);
+#endif
     t_oled  = t_state - (OLED_RETRY_MS - 100);  /* OLED init ~100 ms after power-up */
 #if USE_LED
     t_led   = t_state;
@@ -1270,10 +1389,17 @@ void main(void)
             disp_ok = 1;
         }
 
+#ifdef ITAP_MOTION_HR
+        motion_task();
+#endif
         /* not streaming: drop the sample so the first frame after subscription is fresh */
         if (state != ST_WAIT_NOTIFY && state != ST_NOTIFY) ppg_ready = 0;
         if (state != ST_NOTIFY) imu_ready = 0;      /* the probe is always a PPG frame */
 
+#ifdef ITAP_CAPTURE
+        if (state == ST_NOTIFY) capture_collect();
+        else capture_head = capture_tail = capture_count = 0;
+#endif
         imu_task();                                 /* also runs without a BLE link: feeds the OLED */
 
         switch (state)
@@ -1401,7 +1527,11 @@ void main(void)
                 break;
             }
             cmd_state = CMD_IDLE;                       /* 0x26 = not subscribed yet (sample lost) */
+#ifdef ITAP_MOTION_HR
+            if (motion_has)
+#else
             if (ppg_ready)
+#endif
             {
                 if (g_app_ready || (UINT16)(t - t_state) >= NOTIFY_PROBE_MS)
                 {
@@ -1434,8 +1564,24 @@ void main(void)
             }
 #endif
             cmd_state = CMD_IDLE;
+#ifdef ITAP_MOTION_HR
+            if (motion_ready) ppg_send();
+            else if (imu_ready && (UINT16)(t - motion_acc_sent) >= 1000) {
+                imu_send(); motion_acc_sent = t;
+            }
+#elif defined(ITAP_CAPTURE)
+            /* Alternate when both are pending; neither stream can starve. */
+            if (imu_ready && (capture_acc_turn || !capture_count)) {
+                imu_send();
+                capture_acc_turn = 0;
+            } else if (capture_count) {
+                capture_send();
+                capture_acc_turn = 1;
+            }
+#else
             if (imu_ready) imu_send();              /* 1 Hz, the PPG sample of this round is dropped */
             else if (ppg_ready) ppg_send();         /* one frame per PPG sample */
+#endif
             break;
 
         case ST_DISC_WAIT:                              /* no command for 5 ms after disconnect */

@@ -1,0 +1,110 @@
+{
+  "source": "https://raw.githubusercontent.com/olivesgatech/HeartBEAT/5ce28d20cc59dcca696120cc0db4797ce5af526a/Code/data/",
+  "commit": "5ce28d20cc59dcca696120cc0db4797ce5af526a",
+  "algorithm_sha256": "5f22b03bfec52234999d690169d309370cdbf94ea738439bca3d6be25c40da29",
+  "harness_sha256": "3f0aa54171ccbd6ce783174cb0e69763cfe9e998126e0c2480e65db62237fb88",
+  "numpy": "2.3.5",
+  "scipy": "1.16.3",
+  "ppg_gain": 8,
+  "ppg_offset": 16384,
+  "acc_gain": 4098.360655737705,
+  "note": "ACC assumed g; conversion not confirmed by dataset readme. No algorithm changes.",
+  "files": {
+    "DATA_01_TYPE01": {
+      "signal_sha256": "1efd5eff52d6302d7a70c92e4260a7e03b9d4b3baf327e6f09f5f411f841502b",
+      "reference_sha256": "af8c5acfdc3304b62231da8bafae7e3c076a18f730525e03b8f4bea2eb2510ec",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_02_TYPE02": {
+      "signal_sha256": "3ea010b00a127c9162a1aa7029eba4fc000aff4f74b0b3ab15f17f5e3f38c06e",
+      "reference_sha256": "66f486fb4b1424cc0261b2d40cfd95833e5a08350a7c34785e4e01839a751da2",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_03_TYPE02": {
+      "signal_sha256": "367090eccfeb0d263fde44567487faebe04044f7900aa6d38c76f94682e62bbd",
+      "reference_sha256": "14c6ecc4b7fd1b795320527c171eace70858e9954e79f1e6eecd16492324da60",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_04_TYPE02": {
+      "signal_sha256": "c5abbeb804c8c56f78ab0d99d56640ffec3c1693a94003f55bb4e8ec1da4eef4",
+      "reference_sha256": "8763cb1d38e1cdbc10b2618110738c29ab1ddd43cf9a25bc342af3c1c8cec78e",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_05_TYPE02": {
+      "signal_sha256": "fd5f20105ea8b59c6a0e46990df5a82b5d780b6298be032401b67fdbf9e1e86d",
+      "reference_sha256": "78df991fdf57bd1ed01f95a089121c5a4b8da1fc586f813d53883e5a8c2aabda",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_06_TYPE02": {
+      "signal_sha256": "ad290fc67ebd1212723401b008143ad1bda81200ce468f30ed3f517e19a6cc18",
+      "reference_sha256": "942bd7dde6a9d2979dccdc4813075ebae5428ec070be0fa7ed040f798739c591",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_07_TYPE02": {
+      "signal_sha256": "27443d6ab16103ddeacc589ea292af648e0e0fe3639a96f723010be2243a31c1",
+      "reference_sha256": "a4addca8b65a95f0b69247a5417d358a78ad4494b794b073f14ca927207da1df",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_08_TYPE02": {
+      "signal_sha256": "4b4ee64d58a4a279b4b0ba1dd722be06bc39b2fef31712538d9dec3e2854b8e0",
+      "reference_sha256": "7e940964ef57ffa5cde7edbb6f1fef525d8352845ad1d4e0cf61f116710d8074",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_09_TYPE02": {
+      "signal_sha256": "88c750b531da19e78a1ade37221e95ca26d41f106820da434e3383edd94fe474",
+      "reference_sha256": "dde501cbdc26e028cf843bc6accaa871bf83c784a8f8d0339079bad26de88150",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_10_TYPE02": {
+      "signal_sha256": "22892db766b5491c5df724697deecdccb1b53a42813793fc82c7d014330238a9",
+      "reference_sha256": "bb04fc9f26fc518e5e9ae6fe348b83b14aa1a4ab1b31623a996fe8b577037080",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_11_TYPE02": {
+      "signal_sha256": "d36dce46628593f7aef76dc6b8c7cead46c0585815ca72d8a9801ba2674f02f0",
+      "reference_sha256": "12e3a2262029af27f5f9c23c5f6922df1a52b38309924a299f1f3c9212c3be31",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    },
+    "DATA_12_TYPE02": {
+      "signal_sha256": "3971d5b17b62a2da9d9c4631ff0dc7502dd44df16c0680e2091920bbb839b214",
+      "reference_sha256": "670a1271b50c6bc09a820a0ec04d59c7193c317e03bd0afe3e2599824fa9caa4",
+      "clipping": {
+        "ppg": 0,
+        "acc": 0
+      }
+    }
+  }
+}
