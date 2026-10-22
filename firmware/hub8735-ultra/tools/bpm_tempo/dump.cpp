@@ -44,7 +44,7 @@ int main(int argc, char** argv)
         uint8_t* cursor = encoded;
         int bytes = 0;
         bool eof = false;
-        unsigned rate = 0, frames = 0, errors = 0;
+        unsigned rate = 0, frames = 0, errors = 0, decodedFrames = 0;
         uint32_t hash = 2166136261u;  // FNV-1a over the mono int16 samples, as in the firmware log
         while (rate == 0 || frames < rate * 60) {
             if (!eof && bytes < MAINBUF_SIZE) {
@@ -90,6 +90,7 @@ int main(int argc, char** argv)
                 if (cursor == before && bytes > 0) { ++cursor; --bytes; }
                 continue;
             }
+            if (++decodedFrames <= 3) continue;  // decoder state from the previous file; same as the firmware
             if (rate == 0) {
                 rate = info.samprate;
                 if (!an.begin(rate, 60)) { rate = 0; break; }
