@@ -67,6 +67,8 @@ const char* audioCommandName(AudioCommandType type)
     case AudioCommandType::Resume: return "Resume";
     case AudioCommandType::AnalyzeNewOrUnknownBpm: return "AnalyzeNewOrUnknownBpm";
     case AudioCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
+    case AudioCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
+    case AudioCommandType::SetSongBpm: return "SetSongBpm";
     }
     return "?";
 }
@@ -569,6 +571,28 @@ void handleAudioCommand(AudioCmdElement& command)
             finishBpmScan(BpmAnalysisState::Cancelled);
         }
         break;
+
+    case AudioCommandType::SetSongBpm: {
+        // User correction (x2 / /2). A later "reanalyze all" overwrites it (user decision 2026-10-22).
+        // The scan rewrites the library, so corrections wait until it is finished.
+        const int index = findLibraryEntry(command.filename);
+        if (bpmScan.requested || bpmScan.running || index < 0 || command.bpm < 30 || command.bpm > 300) {
+            LOGW(BPM_TAG, "BPM correction rejected: '%s' -> %u (scan %d, index %d)", command.filename,
+                 static_cast<unsigned>(command.bpm), bpmScan.requested || bpmScan.running ? 1 : 0, index);
+            break;
+        }
+        MusicEntry& entry = musicLibrary.entries[index];
+        const uint16_t previous = entry.bpm;
+        entry.bpm = command.bpm;
+        if (musicLibrarySave(fs, musicLibrary)) {
+            LOGI(BPM_TAG, "BPM corrected by user: %s %u -> %u", entry.file, static_cast<unsigned>(previous),
+                 static_cast<unsigned>(entry.bpm));
+        } else {
+            entry.bpm = previous;
+            LOGE(BPM_TAG, "BPM correction not saved; %s keeps %u", entry.file, static_cast<unsigned>(previous));
+        }
+        break;
+    }
 
     case AudioCommandType::AnalyzeNewOrUnknownBpm:
     case AudioCommandType::ReanalyzeAllBpm:

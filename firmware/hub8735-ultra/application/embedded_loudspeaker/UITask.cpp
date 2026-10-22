@@ -37,11 +37,12 @@ constexpr int16_t DIVIDER_Y = 39;
 constexpr int16_t STATUS_Y[3] = {40, 48, 56};
 
 // Rows depend on the mode: TopStatus (Train progress / Enjoy target / Demo level) outside Manual,
-// TopSongs only in Manual. The Top cursor is a row; topItemAt() maps it to an item.
+// TopSongs only in Manual, TopSongBpm while a library song plays. The Top cursor is a row; topItemAt() maps it to an item.
 enum TopItem : uint8_t {
     TopMode,
     TopStatus,
     TopPlay,
+    TopSongBpm,
     TopSongs,
     TopStop,
     TopVolume,
@@ -61,6 +62,7 @@ enum class Screen : uint8_t {
     BpmAnalysisList,
     BpmStatus,
     SongList,
+    SongMenu,      // one song: [Play] / BPM x2 / BPM /2 / Back (Play only when opened from SongList)
     SourceList,    // PPG / IMU (OK cycles Chest/Watch/Local) / Back
     BleList,       // per device: link (OK connects / disconnects), mode (OK toggles Auto/Manual); Back
     PowerConfirm   // Cancel / Power off
@@ -116,6 +118,9 @@ uint16_t bpmAnalysisFailed = 0;
 char bpmAnalysisFile[AUDIO_FILENAME_MAX] = "";
 
 uint32_t lastRefreshMs = 0;
+int16_t songMenuIndex = -1;     // musicLibrary index shown in SongMenu
+bool songMenuFromList = false;  // SongMenu opened from SongList (has Play, Back returns to the list)
+enum SongMenuItem : uint8_t { SongPlay, SongDouble, SongHalve, SongBack };
 bool powerOffRequested = false;  // set by the confirm screen, handled in the UITask loop
 
 // Reported by BLETask, index = SensorSource (Chest, Watch).
@@ -145,8 +150,28 @@ const char* modeName(PlayMode mode)
     }
 }
 
+// Library index of the song being played or paused, -1 when stopped or not in the library (DEMO tracks).
+int16_t playingLibraryIndex()
+{
+    if (audioState == AudioState::Stopped) return -1;
+    for (size_t i = 0; i < musicLibrary.count && i < MUSIC_LIBRARY_MAX; ++i)
+        if (strcmp(musicLibrary.entries[i].file, nowPlaying) == 0) return static_cast<int16_t>(i);
+    return -1;
+}
+
+// x2 / /2 target for a song's BPM, 0 when unknown or outside 30..300.
+uint16_t scaledBpm(uint16_t bpm, bool doubled)
+{
+    if (bpm == 0) return 0;
+    const uint16_t v = doubled ? static_cast<uint16_t>(bpm * 2) : static_cast<uint16_t>((bpm + 1) / 2);
+    return v >= 30 && v <= 300 ? v : 0;
+}
+
+uint8_t songMenuItemAt(uint16_t row) { return static_cast<uint8_t>(songMenuFromList ? row : row + 1); }
+
 bool topItemVisible(uint8_t item)
 {
+    if (item == TopSongBpm) return playingLibraryIndex() >= 0;
     if (item == TopStatus) return playMode != PlayMode::Manual;
     if (item == TopSongs) return playMode == PlayMode::Manual;
     return true;
@@ -192,6 +217,7 @@ uint16_t itemCount()
     case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
     case Screen::BpmStatus: return MENU_ROWS;
     case Screen::SongList: return songCount();
+    case Screen::SongMenu: return songMenuFromList ? 4 : 3;
     case Screen::SourceList: return SOURCE_LIST_COUNT;
     case Screen::BleList: return BLE_LIST_COUNT;
     case Screen::PowerConfirm: return POWER_CONFIRM_COUNT;
@@ -220,6 +246,7 @@ const char* screenName(Screen value)
     case Screen::BpmAnalysisList: return "BpmAnalysisList";
     case Screen::BpmStatus: return "BpmStatus";
     case Screen::SongList: return "SongList";
+    case Screen::SongMenu: return "SongMenu";
     case Screen::SourceList: return "SourceList";
     case Screen::BleList: return "BleList";
     case Screen::PowerConfirm: return "PowerConfirm";
@@ -233,6 +260,7 @@ const char* topItemName(uint8_t item)
     case TopMode: return "Mode";
     case TopStatus: return "Status";
     case TopPlay: return "Play/Pause";
+    case TopSongBpm: return "Song BPM";
     case TopSongs: return "Songs";
     case TopStop: return "Stop";
     case TopVolume: return "Volume";
@@ -262,9 +290,11 @@ void sendBleCommand(BleCommandType type, uint8_t device)
 }
 
 bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy,
-                 int16_t songIndex = -1, SensorSource source = SensorSource::Chest, uint8_t plan = 0)
+                 int16_t songIndex = -1, SensorSource source = SensorSource::Chest, uint8_t plan = 0,
+                 uint16_t bpm = 0)
 {
     UiCommandElement command{};
+    command.bpm = bpm;
     command.command = type;
     command.trainPlan = plan;
     command.source = source;
@@ -351,10 +381,30 @@ void activateItem()
         break;
     case Screen::SongList:
         if (cursor < musicLibrary.count) {
-            sendCommand(UiCommandType::PlaySong, 0, PlayMode::Enjoy, static_cast<int16_t>(cursor));
+            songMenuIndex = static_cast<int16_t>(cursor);
+            songMenuFromList = true;
+            openList(Screen::SongMenu, 0);
+        } else {
+            backToTop(TopSongs);
         }
-        backToTop(TopSongs);
         break;
+    case Screen::SongMenu: {
+        const uint8_t item = songMenuItemAt(cursor);
+        const bool valid = songMenuIndex >= 0 && songMenuIndex < static_cast<int16_t>(musicLibrary.count);
+        if (item == SongPlay && valid) {
+            sendCommand(UiCommandType::PlaySong, 0, PlayMode::Enjoy, songMenuIndex);
+            backToTop(TopSongs);
+        } else if ((item == SongDouble || item == SongHalve) && valid) {
+            // Stays open: audioTask saves the library and the label shows the new value.
+            const uint16_t bpm = scaledBpm(musicLibrary.entries[songMenuIndex].bpm, item == SongDouble);
+            if (bpm != 0) sendCommand(UiCommandType::SetSongBpm, 0, PlayMode::Enjoy, songMenuIndex, SensorSource::Chest, 0, bpm);
+        } else if (songMenuFromList && valid) {
+            openList(Screen::SongList, static_cast<uint16_t>(songMenuIndex));
+        } else {
+            backToTop(songMenuFromList ? TopSongs : TopSongBpm);
+        }
+        break;
+    }
     case Screen::SourceList:
         if (cursor >= 2) {
             backToTop(TopSource);
@@ -399,6 +449,11 @@ void activateItem()
         case TopPlay:
             if (audioState == AudioState::Playing) sendCommand(UiCommandType::Pause);
             else if (audioState == AudioState::Paused) sendCommand(UiCommandType::Resume);
+            break;
+        case TopSongBpm:
+            songMenuIndex = playingLibraryIndex();
+            songMenuFromList = false;
+            if (songMenuIndex >= 0) openList(Screen::SongMenu, 0);
             break;
         case TopSongs:
             if (musicLibraryReady && !musicBpmAnalysisBusy && musicLibrary.count > 0) {
@@ -498,10 +553,14 @@ void applyUpdate(const UiUpdateElement& update)
             // were seen; repair the panel shortly after rather than up to REFRESH_MS later.
             lastRefreshMs = millis() - REFRESH_MS + 300;
         }
-        audioState = static_cast<AudioState>(update.audioState);
-        if (update.filename[0] != 0) {
-            memcpy(nowPlaying, update.filename, sizeof(nowPlaying));
-            nowPlaying[sizeof(nowPlaying) - 1] = 0;
+        {
+            const uint8_t item = topItemAt(cursor);  // TopSongBpm comes and goes with playback; keep the highlighted item
+            audioState = static_cast<AudioState>(update.audioState);
+            if (update.filename[0] != 0) {
+                memcpy(nowPlaying, update.filename, sizeof(nowPlaying));
+                nowPlaying[sizeof(nowPlaying) - 1] = 0;
+            }
+            if (screen == Screen::Top) cursor = topRowOf(item);
         }
         break;
     case UiUpdateType::BpmAnalysis:
@@ -566,6 +625,26 @@ void itemLabel(uint16_t item, char* out, size_t size)
                      static_cast<unsigned>(musicLibrary.entries[item].bpm));
         }
         return;
+    case Screen::SongMenu: {
+        const uint8_t action = songMenuItemAt(item);
+        if (songMenuIndex < 0 || songMenuIndex >= static_cast<int16_t>(musicLibrary.count)) {
+            snprintf(out, size, "OK: Back");
+            return;
+        }
+        const MusicEntry& e = musicLibrary.entries[songMenuIndex];
+        if (action == SongPlay) {
+            snprintf(out, size, "Play %.14s", e.file);
+        } else if (action == SongDouble || action == SongHalve) {
+            const uint16_t v = scaledBpm(e.bpm, action == SongDouble);
+            if (e.bpm == 0) snprintf(out, size, "%s: BPM unknown", action == SongDouble ? "x2" : "/2");
+            else if (v == 0) snprintf(out, size, "%s: out of range", action == SongDouble ? "x2" : "/2");
+            else snprintf(out, size, "BPM %s: %u -> %u", action == SongDouble ? "x2" : "/2",
+                          static_cast<unsigned>(e.bpm), static_cast<unsigned>(v));
+        } else {
+            snprintf(out, size, "OK: Back");
+        }
+        return;
+    }
     case Screen::BpmStatus:
         switch (item) {
         case 0:
@@ -633,6 +712,13 @@ void itemLabel(uint16_t item, char* out, size_t size)
     case TopSongs:
         snprintf(out, size, "Songs");
         break;
+    case TopSongBpm: {
+        const int16_t i = playingLibraryIndex();
+        if (i >= 0 && musicLibrary.entries[i].bpm != 0)
+            snprintf(out, size, "Song BPM: %u", static_cast<unsigned>(musicLibrary.entries[i].bpm));
+        else snprintf(out, size, "Song BPM: --");
+        break;
+    }
     case TopStop:
         snprintf(out, size, "Stop");
         break;

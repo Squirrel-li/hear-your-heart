@@ -44,6 +44,7 @@ const char* audioCommandName(AudioCommandType type)
     case AudioCommandType::AnalyzeNewOrUnknownBpm: return "AnalyzeNewOrUnknownBpm";
     case AudioCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
     case AudioCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
+    case AudioCommandType::SetSongBpm: return "SetSongBpm";
     }
     return "?";
 }
@@ -65,6 +66,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::PowerOff: return "PowerOff";
     case UiCommandType::PowerOn: return "PowerOn";
     case UiCommandType::RestartTrain: return "RestartTrain";
+    case UiCommandType::SetSongBpm: return "SetSongBpm";
     }
     return "?";
 }
@@ -478,6 +480,98 @@ void startBpmAnalysis(BpmAnalysisMode mode)
     reportBpmAnalysis(BpmAnalysisState::Queued, mode);
 }
 
+// User correction of one song's BPM (OLED x2 / /2 or serial "bpm"). Not a playback command:
+// manual/automatic mode stays as it is. audioTask validates 30..300 and saves the library.
+void setSongBpm(int index, uint16_t bpm)
+{
+    if (!musicLibraryReady || index < 0 || index >= static_cast<int>(musicLibrary.count)) {
+        LOGW(TAG, "SetSongBpm ignored: invalid index %d", index);
+        return;
+    }
+    AudioCmdElement command{};
+    command.command = AudioCommandType::SetSongBpm;
+    command.songIndex = static_cast<int16_t>(index);
+    command.bpm = bpm;
+    strncpy(command.filename, musicLibrary.entries[index].file, sizeof(command.filename) - 1);
+    if (!sendAudioCommand(command)) LOGW(TAG, "SetSongBpm was not sent");
+}
+
+// "bpm ..." serial commands: list / new / all / cancel / x2 <song> / /2 <song> / set <song> <bpm>.
+// <song> is the index printed by "bpm list" or the file name.
+void handleBpmSerial(const String& input)
+{
+    static const char* const USAGE = "serial: usage: bpm list|new|all|cancel|x2 <song>|/2 <song>|set <song> <bpm>";
+    String rest = input.substring(3);
+    rest.trim();
+    const int space = rest.indexOf(' ');
+    String verb = space < 0 ? rest : rest.substring(0, space);
+    String arg = space < 0 ? String("") : rest.substring(space + 1);
+    verb.toLowerCase();
+    arg.trim();
+    if (verb == "list") {
+        LOGI(TAG, "library: %u songs (index file bpm genre)", static_cast<unsigned>(musicLibrary.count));
+        for (size_t i = 0; i < musicLibrary.count && i < MUSIC_LIBRARY_MAX; ++i) {
+            const MusicEntry& e = musicLibrary.entries[i];
+            LOGI(TAG, "  #%u %s %u %s", static_cast<unsigned>(i), e.file, static_cast<unsigned>(e.bpm),
+                 e.genre[0] != 0 ? e.genre : "-");
+        }
+        return;
+    }
+    if (verb == "new" || verb == "all") {
+        startBpmAnalysis(verb == "new" ? BpmAnalysisMode::NewOrUnknown : BpmAnalysisMode::All);
+        return;
+    }
+    if (verb == "cancel") {
+        AudioCmdElement command{};
+        command.command = AudioCommandType::CancelBpmAnalysis;
+        if (!sendAudioCommand(command)) LOGW(TAG, "cancel analysis command was not sent");
+        return;
+    }
+    if (verb != "x2" && verb != "/2" && verb != "set") {
+        LOGW(TAG, "%s", USAGE);
+        return;
+    }
+    String target = arg;
+    long value = 0;
+    if (verb == "set") {
+        const int last = arg.lastIndexOf(' ');
+        if (last < 0) {
+            LOGW(TAG, "%s", USAGE);
+            return;
+        }
+        target = arg.substring(0, last);
+        target.trim();
+        value = arg.substring(last + 1).toInt();
+    }
+    int index = -1;
+    bool digits = target.length() > 0;
+    for (unsigned i = 0; i < target.length(); ++i) digits = digits && isdigit(static_cast<unsigned char>(target[i]));
+    if (digits) {
+        index = target.toInt();
+    } else {
+        target.toLowerCase();  // library names are stored in lower case
+        for (size_t i = 0; i < musicLibrary.count && i < MUSIC_LIBRARY_MAX; ++i)
+            if (target == musicLibrary.entries[i].file) index = static_cast<int>(i);
+    }
+    if (index < 0 || index >= static_cast<int>(musicLibrary.count)) {
+        LOGW(TAG, "serial: no song '%s' (see bpm list)", target.c_str());
+        return;
+    }
+    const uint16_t current = musicLibrary.entries[index].bpm;
+    if (verb == "x2") value = current * 2;
+    else if (verb == "/2") value = (current + 1) / 2;
+    if (verb != "set" && current == 0) {
+        LOGW(TAG, "serial: #%d has no BPM yet; use bpm set", index);
+        return;
+    }
+    if (value < 30 || value > 300) {
+        LOGW(TAG, "serial: BPM %ld is outside 30..300", value);
+        return;
+    }
+    LOGI(TAG, "serial: #%d %s BPM %u -> %ld", index, musicLibrary.entries[index].file, static_cast<unsigned>(current), value);
+    setSongBpm(index, static_cast<uint16_t>(value));
+}
+
 // Software standby: stop everything that runs; BLETask / analysisTask follow systemStandby.
 // playMode is kept for display, but automatic selection stays off until the user picks a mode again.
 void enterStandby()
@@ -577,6 +671,9 @@ void handleUiCommand(const UiCommandElement& cmd)
         trainRunning = false;  // enableAutomaticMode starts the plan over
         enableAutomaticMode(PlayMode::Train, trainPlan);
         break;
+    case UiCommandType::SetSongBpm:
+        setSongBpm(cmd.songIndex, cmd.bpm);
+        break;
     case UiCommandType::PowerOn:
         if (!systemStandby) break;
         systemStandby = false;
@@ -647,6 +744,8 @@ void handleSerialCommand(String input)
     } else if (input.equalsIgnoreCase("resume")) {
         command.command = AudioCommandType::Resume;
         sendManualCommand(command);
+    } else if (input.equalsIgnoreCase("bpm") || input.startsWith("bpm ")) {
+        handleBpmSerial(input);
     } else {
         LOGW(TAG, "serial: unknown command '%s'", input.c_str());
     }
