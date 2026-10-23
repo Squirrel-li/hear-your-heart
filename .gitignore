@@ -118,3 +118,7 @@ Objects/
 
 # Local scratch
 /tmp/
+
+# Local agent instructions and memory
+/AGENTS.md
+/.agents/
