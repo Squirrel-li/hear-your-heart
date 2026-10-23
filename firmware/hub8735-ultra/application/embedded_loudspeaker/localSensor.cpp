@@ -159,6 +159,7 @@ bool imuOn = false;
 // 這個 Wire 實作的 endTransmission(false) 在沒有 TX 完成回呼時會回傳錯誤）。
 bool imuReadBlock(uint8_t reg, uint8_t* buf, uint8_t n)
 {
+    I2cLock lock;
     Wire1.beginTransmission(IMU_ADDR);
     Wire1.write(reg);
     if (Wire1.endTransmission() != 0) return false;  // 位址沒有 ACK
@@ -238,6 +239,7 @@ void imuPoll()
 
 bool imuWrite(uint8_t reg, uint8_t val)
 {
+    I2cLock lock;
     Wire1.beginTransmission(IMU_ADDR);
     Wire1.write(reg);
     Wire1.write(val);
@@ -258,7 +260,10 @@ void localSensorInit()
     ppgOn = false;
     // 匯流排只開一次；停用只靠 EN 腳（PPG）與輸出頻率歸零（IMU）。
     Serial3.begin(PPG_BAUD);
-    Wire1.begin();
+    {
+        I2cLock lock;
+        Wire1.begin();
+    }
     imuWrite(LSM_CTRL1_XL, 0x00);  // 開機後的 LSM6DS3 可能還在上次的設定，先 power-down
     imuWrite(LSM_CTRL2_G, 0x00);
     imuOn = false;

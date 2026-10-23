@@ -2,7 +2,12 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const html=fs.readFileSync(__dirname+'/ble_capture.html','utf8');
 const core=html.split('<script>')[1].split('// UI starts here;')[0];
-const {CaptureDecoder,csvText}=vm.runInNewContext(core+';({CaptureDecoder,csvText})');
+const {CaptureDecoder,csvText,bmhRequest,cmdResponse}=vm.runInNewContext(core+';({CaptureDecoder,csvText,bmhRequest,cmdResponse})');
+assert.deepEqual([...bmhRequest(0x1ff,0x04,0x02,0x1234)],[0x02,0xff,0x04,0x02,0x12,0x34]);
+const rsp=new DataView(new Uint8Array([0,0,0,9,0x10,0x82,7,0,0x05,0x01,0x00,0x04]).buffer);
+assert.deepEqual({...cmdResponse(rsp)},{opcode:2,seq:7,status:0,op:5,addr:1,value:4});
+const fail=new DataView(new Uint8Array([0,0,0,9,0x10,0x82,8,3]).buffer);
+assert.equal(cmdResponse(fail).status,3);assert.equal(cmdResponse(fail).value,undefined);
 function packet(type,ms,seq){
   const b=new DataView(new ArrayBuffer(type===0x11?20:15));
   b.setUint32(0,ms);b.setUint8(4,type);b.setUint32(5,seq);

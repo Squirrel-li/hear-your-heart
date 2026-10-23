@@ -754,11 +754,11 @@ uint32_t clockSeconds()
     return millis() / 1000;
 }
 
-// Single-cell Li-ion, rough discharge curve (battery mV -> %); 0% at 3.4 V leaves headroom for amp load sag; 100% at 4.1 V, where the charger stops. Below BATTERY_MIN_MV the
-// ADC is taken as "no battery connected" and "--" is shown.
+// Single-cell Li-ion, linear map 3.6 V = 0% .. 4.0 V = 100%: drops the top and bottom ~10% of the discharge
+// curve, clamped outside. Below BATTERY_MIN_MV the ADC is taken as "no battery connected" and "--" is shown.
 constexpr uint32_t BATTERY_MIN_MV = 2500;
-constexpr uint16_t BATTERY_CURVE[][2] = {{3400, 0},  {3500, 10}, {3600, 25}, {3700, 45},
-                                         {3800, 65}, {3900, 82}, {4000, 93}, {4100, 100}};
+constexpr uint32_t BATTERY_EMPTY_MV = 3600;
+constexpr uint32_t BATTERY_FULL_MV = 4000;
 
 // Returns 0..100, or -1 when no battery is detected. Averages a few reads to tame ADC noise.
 int batteryPercent()
@@ -766,17 +766,14 @@ int batteryPercent()
     uint32_t sum = 0;
     constexpr uint8_t SAMPLES = 8;
     for (uint8_t i = 0; i < SAMPLES; ++i) sum += analogRead(PIN_BATTERY);
-    const uint32_t mv = (sum / SAMPLES) * 3300UL / 4095UL * 2;  // 12-bit reading, undo the /2 divider
+    const uint32_t raw = sum / SAMPLES;
+    const uint32_t mv = raw * 3300UL / 4096UL * 2;  // core scales mV/3300 to 12 bits; undo the /2 divider
+    LOGI(TAG, "battery adc=%lu pin=%lumV battery=%lumV", static_cast<unsigned long>(raw),
+         static_cast<unsigned long>(mv / 2), static_cast<unsigned long>(mv));
     if (mv < BATTERY_MIN_MV) return -1;
-    constexpr size_t N = sizeof(BATTERY_CURVE) / sizeof(BATTERY_CURVE[0]);
-    if (mv <= BATTERY_CURVE[0][0]) return 0;
-    for (size_t i = 1; i < N; ++i) {
-        if (mv > BATTERY_CURVE[i][0]) continue;
-        const uint32_t lo = BATTERY_CURVE[i - 1][0], hi = BATTERY_CURVE[i][0];
-        const uint32_t pLo = BATTERY_CURVE[i - 1][1], pHi = BATTERY_CURVE[i][1];
-        return static_cast<int>(pLo + (mv - lo) * (pHi - pLo) / (hi - lo));
-    }
-    return 100;
+    if (mv <= BATTERY_EMPTY_MV) return 0;
+    if (mv >= BATTERY_FULL_MV) return 100;
+    return static_cast<int>((mv - BATTERY_EMPTY_MV) * 100 / (BATTERY_FULL_MV - BATTERY_EMPTY_MV));
 }
 
 void draw()

@@ -3,6 +3,7 @@
 
 #include <FreeRTOS.h>
 #include <queue.h>
+#include <semphr.h>
 
 #include <Arduino.h>
 #include <stdint.h>
@@ -27,6 +28,15 @@ extern QueueHandle_t bleTxQueue;		// BLE transmission queue
 extern QueueHandle_t bleCmdQueue;		// Connection commands from UITask to BLETask
 
 bool appQueuesInit();
+
+// The SDK's Wire and Wire1 share one global "TX complete" flag (Wire.cpp), so a transfer on one bus
+// can make the other's endTransmission() report a NACK. Every I2C transfer (OLED on Wire, LSM6DS3 on
+// Wire1) holds this lock; created in appQueuesInit() before any task starts.
+extern SemaphoreHandle_t i2cMutex;
+struct I2cLock {
+    I2cLock() { xSemaphoreTake(i2cMutex, portMAX_DELAY); }
+    ~I2cLock() { xSemaphoreGive(i2cMutex); }
+};
 
 // 啟動流程：audioTask 先初始化 SD 並載入 musicLibrary，之後才設為 true；
 // controlTask 等到 true 才開始選曲，避免讀到載入中的曲目表。

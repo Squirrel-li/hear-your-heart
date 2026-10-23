@@ -780,6 +780,68 @@ static void ppg_start(void)
 }
 #endif
 
+#ifdef ITAP_CAPTURE
+/* FFF2 cmd (ble-notify-data-format.md 6), opcode 0x02 = BMH08002-4 pass-through:                      */
+/*   request  02 seq op addr hi lo     -> module 55 B1 op addr hi lo CS AA (op 01 work, 02 wave, 04 write */
+/*                                        EEPROM, 05 read EEPROM, 06 calibrate)                            */
+/*   response cmd frame payload 82 seq status [op addr hi lo of the module reply]                          */
+/* Polled with the UART0 interrupt off, like ppg_start(): PPG frames during the exchange are lost and   */
+/* show up as a sequence gap. Status 03 = the module did not answer within BMH_REPLY_MS.               */
+#define CMD_BMH             0x02
+#define BMH_REPLY_MS        500
+#define RSP_HDR             5               /* sensor_time_ms + msgType */
+__xdata UINT8 cmd_rsp[RSP_HDR + 7] = { 0, 0, 0, 0, SENSOR_SRC };
+UINT8 cmd_rsp_len = 0;                      /* 0 = no response pending */
+
+static void bmh_putc(UINT8 c)
+{
+    TI = 0;
+    SBUF = c;
+    while (TI == 0);
+}
+
+static void bmh_passthrough(__xdata UINT8 *req, UINT8 len)
+{
+    __xdata UINT8 *r = cmd_rsp + RSP_HDR;   /* r[0] opcode|80  r[1] seq  r[2] status  r[3..6] reply */
+    UINT8 i, c, st = 0, op = req[2];
+    UINT16 t0;
+
+    r[0] = req[0] | 0x80;
+    r[1] = req[1];
+    cmd_rsp_len = RSP_HDR + 3;
+    if (req[0] != CMD_BMH) { r[2] = 0x01; return; }
+    if (len != 6 || !(op == 0x01 || op == 0x02 || op == 0x04 || op == 0x05 || op == 0x06)) { r[2] = 0x02; return; }
+    r[2] = 0x03;
+    clr_ES;
+    RI = 0;
+    bmh_putc(0x55);
+    bmh_putc(0xB1);
+    for (i = 2; i < 6; i++) bmh_putc(req[i]);
+    bmh_putc((UINT8)(0xB1 + req[2] + req[3] + req[4] + req[5]));
+    bmh_putc(0xAA);
+    TI = 0;
+    t0 = now_ms();
+    while ((UINT16)(now_ms() - t0) < BMH_REPLY_MS)
+    {
+        if (!RI) continue;
+        c = SBUF;
+        RI = 0;
+        if (st == 0)      st = (c == 0x55);
+        else if (st == 1) st = (c == 0xB1) ? 2 : (c == 0x55);  /* streaming 55 B0 frames are skipped */
+        else if (st < 6)  r[1 + st++] = c;                      /* st 2..5 -> r[3..6] */
+        else if (st == 6) st = (c == (UINT8)(0xB1 + r[3] + r[4] + r[5] + r[6])) ? 7 : 0;
+        else
+        {
+            if (c == 0xAA && r[3] == op) { r[2] = 0x00; cmd_rsp_len = RSP_HDR + 7; break; }
+            st = 0;
+        }
+    }
+    ppg_i = 0;                              /* a module frame cut by the exchange is dropped */
+    RI = 0;
+    set_ES;
+}
+#endif
+
 static void ppg_send(void)
 {
 #ifdef ITAP_MOTION_HR
@@ -1570,8 +1632,18 @@ void main(void)
                 imu_send(); motion_acc_sent = t;
             }
 #elif defined(ITAP_CAPTURE)
+            if (cmd_rsp_len)
+            {
+                UINT32 ts = uptime_ms();
+                cmd_rsp[0] = (UINT8)(ts >> 24);
+                cmd_rsp[1] = (UINT8)(ts >> 16);
+                cmd_rsp[2] = (UINT8)(ts >> 8);
+                cmd_rsp[3] = (UINT8)ts;
+                bm_notify_send(cmd_rsp, cmd_rsp_len);
+                cmd_rsp_len = 0;
+            }
             /* Alternate when both are pending; neither stream can starve. */
-            if (imu_ready && (capture_acc_turn || !capture_count)) {
+            else if (imu_ready && (capture_acc_turn || !capture_count)) {
                 imu_send();
                 capture_acc_turn = 0;
             } else if (capture_count) {
@@ -1601,11 +1673,20 @@ void main(void)
         }
 
         /* handle data written by the peer to FFF2 */
+#ifdef ITAP_CAPTURE
+        /* wait for a pending BM7701 ACK first: the exchange blocks up to BMH_REPLY_MS */
+        if (fff2_new && cmd_state != CMD_WAIT && !cmd_rsp_len)
+        {
+            fff2_new = 0;
+            if (fff2_len >= 2 && fff2_buf[0] != 0x01) bmh_passthrough(fff2_buf, fff2_len);   /* 01 = handshake */
+        }
+#else
         if (fff2_new)
         {
             fff2_new = 0;
             /* TODO: parse fff2_buf[0..fff2_len-1] (commands from phone) */
         }
+#endif
 
 #if USE_OLED
         key_task();
