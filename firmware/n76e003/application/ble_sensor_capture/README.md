@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 不同安裝位置可傳入 `-SdccHome`。
 
 輸出：`Release/ble_sensor_capture.hex`（Intel HEX）。腳本不燒錄、不改 MCU Config。
-2026-10-18 實際編譯連結：**XRAM 661 B／768 B，Flash 10,184 B／18,432 B**。
+2026-10-23 實際編譯連結（含 BMH08002-4 轉送）：**XRAM 680 B／768 B，Flash 10,860 B／18,432 B**。
 這是靜態連結數值，不是最壞執行時堆疊驗證。
 
 使用原本 Nu-Link／NuEclipse 燒錄流程。UART1 的 P1.6／P0.2 與 ICP 共用：
@@ -70,8 +70,16 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
    也可自行執行：`python -m http.server 8772 --bind 127.0.0.1 --directory apps/bmh08002_ppg_analyzer`。
 
 3. 在 Chrome／Edge 開啟 **http://localhost:8772/ble_capture.html**，選擇 `BLE_capture_ITAP`。
-4. 記錄頁自動訂閱 FFF1 並開始保存。切換活動標記，先各錄靜止／走路／擺手至少30–60秒。
-5. 按「停止並斷線」，分別下載 PPG CSV、ACC CSV、完整 JSON。
+4. 連線後先顯示即時波形（IR、紅光、ACC 合力，最近10秒），**不寫入資料**。按「開始記錄」才建立新記錄，可多次開始／停止而不斷線。
+   切換活動標記，先各錄靜止／走路／擺手至少30–60秒。
+5. 按「停止記錄」，分別下載 PPG CSV、ACC CSV、完整 JSON。
+
+### BMH08002-4 設定
+
+記錄頁的「BMH08002-4 設定」區經 FFF2 cmd opcode 0x02 轉送模組指令（格式見 `ble-notify-data-format.md` 第6節）：
+讀寫 mode、ir/red 光強上下限、interval，開始／停止量測、校正靈敏度，以及任意 EEPROM 位址讀寫。
+設定寫在模組 EEPROM，斷電後仍保留；本韌體開機會把 mode 改回 4。每個指令讓 PPG 中斷最多約0.5秒（序號缺口），
+記錄中下的指令與結果會寫進該筆記錄的 JSON。其他手錶韌體不支援此指令。
 
 每次連線都是新的記錄。記錄寫入瀏覽器 IndexedDB，重新整理後可選舊記錄；
 資料庫只屬於同一瀏覽器設定檔與 `http://localhost:8772` 網站來源，換成127.0.0.1會是另一份。
@@ -99,6 +107,7 @@ PPG 的 `d1` 就是模組 D3，符合原型讀取格式。
 
 ```powershell
 python firmware/n76e003/application/ble_sensor_capture/test_capture.py
+python firmware/n76e003/application/ble_sensor_capture/test_bmh_cmd.py
 node apps/bmh08002_ppg_analyzer/test_ble_capture.js
 python apps/bmh08002_ppg_analyzer/test_motion_hr.py
 ```

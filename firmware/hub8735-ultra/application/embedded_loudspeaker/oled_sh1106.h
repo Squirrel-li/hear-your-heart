@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <Adafruit_OLED_libraries/Adafruit_GFX.h>
 
+#include "globalData.h"
+
 // Minimal 128x64 SH1106 I2C driver on top of the SDK's Adafruit_GFX.
 // SH1106 only supports page addressing and its 132-column RAM puts the
 // visible area at column 2, so SDK's Adafruit_SSD1306 cannot drive it.
@@ -18,8 +20,11 @@ public:
     // Returns false when the display does not acknowledge on the bus.
     bool begin()
     {
-        wire_->begin();
-        wire_->setClock(400000);
+        {
+            I2cLock lock;
+            wire_->begin();
+            wire_->setClock(400000);
+        }
         static const uint8_t init[] = {
             0xAE,             // display off
             0xD5, 0x80,       // clock divide
@@ -73,6 +78,7 @@ public:
             bool ok = command(0xB0 | page) && command(0x02) && command(0x10);
             // Wire's buffer is 128 bytes; keep each transfer small.
             for (int16_t x = 0; ok && x < WIDTH; x += CHUNK) {
+                I2cLock lock;
                 wire_->beginTransmission(address_);
                 wire_->write((uint8_t)0x40);
                 wire_->write(&now[x], (size_t)CHUNK);
@@ -105,6 +111,7 @@ private:
 
     bool command(uint8_t c)
     {
+        I2cLock lock;
         wire_->beginTransmission(address_);
         wire_->write((uint8_t)0x00);
         wire_->write(c);

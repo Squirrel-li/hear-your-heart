@@ -2,22 +2,45 @@
 <html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>手錶 PPG / ACC 資料記錄</title>
 <style>
-body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-width:850px;margin:40px auto;padding:0 20px}section{background:white;border:1px solid #c8d8dd;border-radius:12px;padding:22px;margin:20px 0}h1{font-size:28px}button,select{font:inherit;padding:10px;margin:6px 8px 6px 0;max-width:100%}button{cursor:pointer}output{display:block;white-space:pre-wrap}label{display:block}small{color:#45616b}:focus-visible{outline:3px solid #087b88}#error{color:#a02623}code{overflow-wrap:anywhere}
+body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-width:1500px;margin:40px auto;padding:0 20px}section{background:white;border:1px solid #c8d8dd;border-radius:12px;padding:22px;margin:20px 0}h1{font-size:28px}button,select,input{font:inherit;padding:10px;margin:6px 8px 6px 0;max-width:100%}button{cursor:pointer}output{display:block;white-space:pre-wrap}label{display:block}label.inline{display:inline-block;margin-right:12px}small{color:#45616b}:focus-visible{outline:3px solid #087b88}#error{color:#a02623}code{overflow-wrap:anywhere}
+.layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:20px;align-items:start}.layout>div>section:first-child{margin-top:0}
+@media (max-width:900px){.layout{grid-template-columns:minmax(0,1fr)}}
 </style>
 <h1>手錶 PPG / ACC 資料記錄</h1>
 <p>電腦藍牙直接連接 <code>BLE_capture_ITAP</code>。PPG 約 35.7 Hz、加速度 26 Hz；使用手錶時間戳，保留序號與漏包資訊。</p>
-<section><h2>1. 連線並記錄</h2>
+<div class="layout"><div id="waveCol">
+<section><h2>即時波形（最近 10 秒）</h2>
+<canvas id="wave" width="800" height="600" style="width:100%;border:1px solid #c8d8dd;border-radius:8px" role="img" aria-label="IR、紅光 PPG 與加速度合力即時波形"></canvas>
+<output id="latest" aria-live="off"></output>
+<p id="scales"></p>
+<button id="lockScale">以目前範圍固定</button><button id="autoScale">全部改回自動</button>
+<p><small>縱軸上下限都填寫時固定不動，超出範圍的點畫在邊界上；任一欄空白就依最近 10 秒的最小／最大值自動縮放。</small></p>
+</section>
+</div><div>
+<section><h2>1. 連線與記錄</h2>
+<button id="connect" disabled>選擇手錶並連線</button><button id="disconnect" disabled>斷線</button>
 <label>活動標記 <select id="activity"><option value="rest">靜止</option><option value="walk">走路</option><option value="run">跑步</option><option value="arm_motion">擺手</option><option value="loose">鬆動佩戴</option></select></label>
-<button id="connect" disabled>選擇手錶，開始記錄</button><button id="stop" disabled>停止並斷線</button>
+<button id="record" disabled>開始記錄</button><button id="stop" disabled>停止記錄</button>
 <output id="state" role="status">正在開啟本機資料庫…</output><output id="stats" aria-live="off"></output><output id="error" role="alert"></output>
-<p><small>活動標記可隨時切換，記錄的是操作當下的標記，並非精準動作起始時間。手錶模組心率不是獨立驗證真值。頁面保持開啟，完成後匯出；關閉 HUB 的自動連線，避免它占用手錶連線。</small></p>
+<p><small>連線後只顯示即時波形、不寫入資料；按「開始記錄」才建立一筆新記錄，可多次開始／停止而不必斷線。活動標記記錄的是操作當下的標記，並非精準動作起始時間。手錶模組心率不是獨立驗證真值。關閉 HUB 的自動連線，避免它占用手錶連線。</small></p>
+</section>
+<section><h2>BMH08002-4 設定</h2>
+<p><small>設定寫在模組自己的 EEPROM，斷電後仍保留。capture 韌體每次開機會把 mode 改回 4（連續上傳），所以 mode 的修改只維持到下次開機；mode 只建議用 4（連續上傳）或 12（連續上傳＋滿量程值手動更新），其他值會讓即時波形停止；interval 只用於定時上傳模式。光強欄位的最小值必須小於最大值。每個指令會讓 PPG 中斷最多約 0.5 秒，記錄中會出現序號缺口；記錄中下的指令也會寫進該筆記錄的 JSON。</small></p>
+<div id="fields"></div>
+<button id="readAll" disabled>讀取全部</button><button id="writeAll" disabled>寫入已修改欄位</button>
+<p><button id="mStart" disabled>開始量測</button><button id="mStop" disabled>停止量測</button><button id="mCal" disabled>校正靈敏度</button></p>
+<p>波形模式 <button id="mode4" disabled>mode 4：滿量程自動更新</button><button id="mode12" disabled>mode 12：滿量程固定</button><button id="mWave" disabled>更新滿量程（mode 12 用）</button></p>
+<p><label class="inline">EEPROM 位址 <input id="addr" size="5" value="0x01"></label><label class="inline">值 <input id="val" size="7" value="0x0004"></label>
+<button id="rd" disabled>讀取</button><button id="wr" disabled>寫入</button></p>
+<output id="cmdlog" aria-live="polite"></output>
 </section>
 <section><h2>2. 匯出記錄</h2>
 <label>本機已保存的記錄 <select id="sessions"></select></label>
 <button id="ppg" disabled>下載 PPG CSV</button><button id="acc" disabled>下載 ACC CSV</button><button id="raw" disabled>下載完整 JSON</button>
-<p>通知逐筆存入此瀏覽器的 IndexedDB，重新整理後仍可選取舊記錄。停止後下載三個檔案作備份；清除網站資料或瀏覽器儲存回收可能移除本機記錄。</p>
-<p><small>PPG 與 ACC 的 elapsed_s 都是手錶開機時間（同一時鐘），不是電腦收包時間。無法解析、重複或倒序封包僅保留在完整 JSON。異常重啟會停止這次記錄，重新連線會建立新記錄。</small></p>
+<p>記錄中的通知逐筆存入此瀏覽器的 IndexedDB，重新整理後仍可選取舊記錄。停止後下載三個檔案作備份；清除網站資料或瀏覽器儲存回收可能移除本機記錄。</p>
+<p><small>PPG 與 ACC 的 elapsed_s 都是手錶開機時間（同一時鐘），不是電腦收包時間。無法解析、重複或倒序封包及設定指令只保留在完整 JSON。偵測到裝置重啟會停止這次記錄，再按「開始記錄」會建立新記錄。</small></p>
 </section>
+</div></div>
 <script>
 'use strict';
 // Shared by the page and the runnable Node checks (no Bluetooth needed).
@@ -53,6 +76,14 @@ class CaptureDecoder {
     return row;
   }
 }
+// FFF2 BMH08002-4 pass-through (ble-notify-data-format.md section 6, opcode 0x02).
+function bmhRequest(seq,op,addr=0,value=0){return new Uint8Array([0x02,seq&255,op,addr&255,(value>>8)&255,value&255]);}
+function cmdResponse(view){ // null = not a cmd response frame
+  if(view.byteLength<8||(view.getUint8(4)&0x0f)!==0)return null;
+  const r={opcode:view.getUint8(5)&0x7f,seq:view.getUint8(6),status:view.getUint8(7)};
+  if(view.byteLength>=12){r.op=view.getUint8(8);r.addr=view.getUint8(9);r.value=view.getUint16(10);}
+  return r;
+}
 function csvText(records,kind){
   const fields=['elapsed_s',...(kind==='ppg'?['ir_ppg','red_ppg','status','d1']:['acc_x','acc_y','acc_z']),
     'sensor_time_ms','sequence','seq_gap','dt_ms','host_elapsed_s','host_unix_ms','activity'];
@@ -62,14 +93,69 @@ function csvText(records,kind){
 }
 // UI starts here; tests evaluate only the pure decoder/export section above.
 const $=id=>document.getElementById(id),uuid=n=>`0000${n}-0000-1000-8000-00805f9b34fb`;
-let db,device,characteristic,current,decoder,recording=false,connecting=false,start=0;
-let totals,pending=new Set();
+// [name, EEPROM address, lower, upper] from the datasheet; mode bit4 is a hardware layout bit and must stay 0.
+const FIELDS=[['mode',0x01,0,15],['ir_min',0x02,0,30000],['ir_max',0x04,0,30000],['red_min',0x06,0,30000],['red_max',0x08,0,30000],['interval(x4ms)',0x0a,3,65535]];
+const CMD_STATUS={1:'韌體不支援此指令（確認燒的是 capture 版）',2:'參數錯誤',3:'模組沒有回應'};
+let db,device,fff1,fff2,current=null,decoder,connected=false,connecting=false,busy=false,start=0;
+let totals,pending=new Set(),cmdSeq=0,waiter=null,config={};
+const WINDOW_S=10,live={ir:[],red:[],acc:[]};let drawQueued=false;
 function error(e){$('error').textContent=String(e.message||e);}
 function render(){
-  $('connect').disabled=!db||recording||connecting;
-  $('stop').disabled=!recording;
+  const recording=!!current;
+  $('connect').disabled=!db||connected||connecting;$('disconnect').disabled=!connected;
+  $('record').disabled=!connected||recording;$('stop').disabled=!recording;
+  for(const id of ['readAll','writeAll','mStart','mStop','mCal','mode4','mode12','mWave','rd','wr'])$(id).disabled=!connected||busy;
   for(const id of ['ppg','acc','raw'])$(id).disabled=recording||connecting||!$('sessions').value;
-  if(totals)$('stats').textContent=`PPG ${totals.ppg} 筆｜ACC ${totals.acc} 筆｜序號缺口 ${totals.gaps} 筆｜異常 ${totals.bad} 筆｜已寫入 ${totals.saved} 筆`;
+  if(totals)$('stats').textContent=`PPG ${totals.ppg} 筆｜ACC ${totals.acc} 筆｜序號缺口 ${totals.gaps} 筆｜異常 ${totals.bad} 筆`+
+    (recording?`｜本次記錄已寫入 ${totals.saved} 筆`:'');
+}
+const TRACES=[['ir','IR PPG','#087b88'],['red','紅光 PPG','#b33a3a'],['acc','ACC 合力','#5a4fa0']];
+function liveRange(k){let lo=Infinity,hi=-Infinity;for(const p of live[k]){lo=Math.min(lo,p[1]);hi=Math.max(hi,p[1]);}return [lo,hi];}
+function fixedRange(k){ // [lo, hi] when both boxes hold numbers with lo < hi, else null (auto)
+  const lo=$('lo_'+k).value.trim(),hi=$('hi_'+k).value.trim();
+  if(lo===''||hi==='')return null;
+  const a=Number(lo),b=Number(hi);
+  return Number.isFinite(a)&&Number.isFinite(b)&&a<b?[a,b]:null;
+}
+function plot(){
+  drawQueued=false;
+  const c=$('wave'),g=c.getContext('2d'),w=c.width,h=c.height/3;
+  g.clearRect(0,0,c.width,c.height);g.font='14px system-ui';
+  const now=Math.max(...TRACES.map(([k])=>live[k].at(-1)?.[0]??0));
+  TRACES.forEach(([k,label,color],row)=>{
+    const pts=live[k],top=row*h,fixed=fixedRange(k);
+    const [lo,hi]=fixed??liveRange(k),span=hi-lo||1;
+    g.fillStyle='#45616b';
+    g.fillText(`${label}（${fixed?'固定':'自動'}${pts.length?` ${Math.round(lo)}–${Math.round(hi)}`:''}）`,6,top+16);
+    if(pts.length<2)return;
+    g.strokeStyle=color;g.lineWidth=1.5;g.beginPath();
+    pts.forEach(([t,v],i)=>{
+      const x=w-(now-t)/WINDOW_S*w,y=top+h-6-(Math.min(hi,Math.max(lo,v))-lo)/span*(h-28);
+      i?g.lineTo(x,y):g.moveTo(x,y);
+    });
+    g.stroke();
+  });
+}
+for(const [k,label] of TRACES){
+  const row=document.createElement('label');row.className='inline';row.append(label+' 下限 ');
+  for(const side of ['lo','hi']){
+    if(side==='hi')row.append(' 上限 ');
+    const input=document.createElement('input');input.id=`${side}_${k}`;input.size=6;input.inputMode='decimal';
+    input.oninput=plot;row.append(input);
+  }
+  $('scales').append(row);
+}
+$('lockScale').onclick=()=>{for(const [k] of TRACES){if(live[k].length<2)continue;
+  const [lo,hi]=liveRange(k),pad=Math.max(1,(hi-lo)*0.1);
+  $('lo_'+k).value=Math.floor(lo-pad);$('hi_'+k).value=Math.ceil(hi+pad);}plot();};
+$('autoScale').onclick=()=>{for(const [k] of TRACES)$('lo_'+k).value=$('hi_'+k).value='';plot();};
+function show(sample){
+  const t=sample.elapsed_s;
+  if(sample.kind==='ppg'){live.ir.push([t,sample.ir_ppg]);live.red.push([t,sample.red_ppg]);
+    $('latest').textContent=`IR ${sample.ir_ppg}｜紅光 ${sample.red_ppg}｜status ${sample.status}｜模組 D3 ${sample.d1}`;}
+  else live.acc.push([t,Math.hypot(sample.acc_x,sample.acc_y,sample.acc_z)]);
+  for(const k in live)while(live[k].length&&live[k][0][0]<t-WINDOW_S)live[k].shift();
+  if(!drawQueued){drawQueued=true;requestAnimationFrame(plot);}
 }
 function transaction(store,action){
   return new Promise((resolve,reject)=>{
@@ -93,27 +179,121 @@ async function refresh(){
   if(current)$('sessions').value=current.id;else if(selected)$('sessions').value=selected;
   render();
 }
-async function stop(message='記錄已停止；可下載備份。'){
-  recording=false;
-  if(characteristic)characteristic.removeEventListener('characteristicvaluechanged',receive);
-  if(device?.gatt.connected)device.gatt.disconnect();
+// Each record is committed independently; unfinished writes are awaited when recording stops.
+function save(record){
+  const s=transaction('frames',store=>store.add(record));pending.add(s);
+  s.then(()=>{totals.saved++;},e=>{error(e);void stopRecording('寫入失敗，已停止記錄；請匯出已保存的資料。');})
+    .finally(()=>{pending.delete(s);render();});
+}
+async function startRecording(){
+  const session={id:crypto.randomUUID(),started:new Date().toISOString(),device:device.name,format:1,
+    firmware:'ble_sensor_capture',acc_odr_hz:26,acc_range_g:8,acc_units:'raw int16; 0.244 mg/LSB',
+    ppg_time:'UART packet completion',acc_time:'DRDY poll/readout; no FIFO',reference:'module D3 is not independent ground truth',
+    bmh_config_last_read:{...config}};
+  await transaction('sessions',store=>store.add(session));
+  current=session;totals.saved=0;start=performance.now();
+  $('state').textContent='已連線，記錄中。';await refresh();
+}
+async function stopRecording(message='記錄已停止；可下載備份。'){
+  if(!current)return;
+  current=null;
   await Promise.allSettled([...pending]);
-  $('state').textContent=message;render();
+  $('state').textContent=connected?message+'（仍連線，持續顯示波形）':message;await refresh();
 }
 function receive(event){
-  if(!recording)return;
   const view=event.target.value;
-  const record={session:current.id,host_elapsed_s:(performance.now()-start)/1000,
+  const rsp=cmdResponse(view);
+  if(rsp){if(waiter&&rsp.seq===waiter.seq)waiter.resolve(rsp);return;}
+  const record=current&&{session:current.id,host_elapsed_s:(performance.now()-start)/1000,
     host_unix_ms:Date.now(),activity:$('activity').value,
     raw_hex:Array.from(new Uint8Array(view.buffer,view.byteOffset,view.byteLength),b=>b.toString(16).padStart(2,'0')).join(' ')};
-  let reset=false;
-  try{record.sample=decoder.decode(view);totals[record.sample.kind]++;totals.gaps+=record.sample.seq_gap;}
-  catch(e){record.error=e.message;totals.bad++;reset=e.message.startsWith('reset_');}
-  // Each received frame is committed independently; unfinished writes are awaited on stop.
-  const save=transaction('frames',store=>store.add(record));pending.add(save);
-  save.then(()=>{totals.saved++;},e=>{error(e);void stop('寫入失敗，已停止；請匯出已保存的資料。');})
-    .finally(()=>{pending.delete(save);render();});
-  if(reset)void stop('偵測到裝置重啟或倒序封包；已停止，請重新連線建立新記錄。');
+  try{
+    const sample=decoder.decode(view);totals[sample.kind]++;totals.gaps+=sample.seq_gap;
+    if(record){record.sample=sample;save(record);}
+    show(sample);
+  }catch(e){
+    totals.bad++;
+    if(record){record.error=e.message;save(record);}
+    if(e.message.startsWith('reset_')){
+      decoder=new CaptureDecoder();for(const k in live)live[k]=[];
+      void stopRecording('偵測到裝置重啟或倒序封包；已停止記錄，可重新開始新記錄。');
+    }
+  }
+  render();
+}
+async function command(op,addr=0,value=0){
+  const seq=cmdSeq=(cmdSeq+1)&255;
+  let timer;
+  const reply=new Promise((resolve,reject)=>{waiter={seq,resolve};timer=setTimeout(()=>reject(Error('手錶沒有回應指令（逾時）')),2000);});
+  try{
+    await fff2.writeValueWithoutResponse(bmhRequest(seq,op,addr,value));
+    const rsp=await reply;
+    if(rsp.opcode!==0x02)throw Error('收到非預期的指令回應');
+    if(rsp.status)throw Error(CMD_STATUS[rsp.status]||`指令錯誤 status=${rsp.status}`);
+    return rsp;
+  }finally{clearTimeout(timer);waiter=null;}
+}
+async function run(label,work){
+  if(busy)return;busy=true;render();$('error').textContent='';
+  try{
+    const text=await work();$('cmdlog').textContent=`${new Date().toLocaleTimeString()} ${label}：${text}`;
+    if(current)save({session:current.id,host_unix_ms:Date.now(),activity:$('activity').value,command:label,result:text,bmh_config:{...config}});
+  }catch(e){$('cmdlog').textContent=`${label}失敗`;error(e);}
+  finally{busy=false;render();}
+}
+function parseNumber(text,max,min=0,name='數值'){
+  const v=Number(String(text).trim());
+  if(String(text).trim()===''||!Number.isInteger(v)||v<min||v>max)throw Error(`${name}需為 ${min}–${max} 的整數（可用 0x 十六進位）`);
+  return v;
+}
+async function readField(name,addr){const r=await command(0x05,addr);config[name]=r.value;$('f_'+addr).value=r.value;return r.value;}
+for(const [name,addr,min,max] of FIELDS){
+  const label=document.createElement('label');label.className='inline';
+  label.append(name+' ');const input=document.createElement('input');input.id='f_'+addr;input.size=6;label.append(input);
+  const range=document.createElement('small');range.textContent=` ${min}–${max}`;label.append(range);
+  $('fields').append(label);
+}
+$('readAll').onclick=()=>run('讀取全部',async()=>{
+  for(const [n,a] of FIELDS)await readField(n,a);
+  return FIELDS.map(([n])=>`${n}=${config[n]}`).join(' ');
+});
+$('writeAll').onclick=()=>run('寫入已修改欄位',async()=>{
+  const changes=[],values={};
+  for(const [n,a,min,max] of FIELDS){
+    if(!(n in config))throw Error('請先「讀取全部」，再修改欄位');
+    values[n]=parseNumber($('f_'+a).value,max,min,n);
+  }
+  if(values.mode&0x10)throw Error('mode bit4 是硬體佈局位元，必須為 0');
+  if(values.ir_min>=values.ir_max||values.red_min>=values.red_max)throw Error('最小光強必須小於最大光強');
+  // Check everything first so a bad field never leaves a half-written configuration.
+  for(const [n,a] of FIELDS){
+    if(values[n]===config[n])continue;
+    await command(0x04,a,values[n]);changes.push(`${n}=${await readField(n,a)}`);
+  }
+  return changes.length?'已寫入並讀回 '+changes.join(' '):'沒有修改';
+});
+$('mStart').onclick=()=>run('開始量測',async()=>{await command(0x01,0,0);return 'OK';});
+$('mStop').onclick=()=>run('停止量測',async()=>{await command(0x01,0,1);return 'OK（波形會停止，按開始量測恢復）';});
+$('mCal').onclick=()=>run('校正靈敏度',async()=>{const r=await command(0x06);return `模組回覆 addr=${r.addr} value=${r.value}`;});
+for(const m of [4,12])$('mode'+m).onclick=()=>run(`設定 mode ${m}`,async()=>{
+  await command(0x04,0x01,m);return `mode 讀回 ${await readField('mode',0x01)}（重開機會改回 4）`;
+});
+$('mWave').onclick=()=>run('更新滿量程',async()=>{await command(0x02);return 'OK（mode 12 之後的波形以新的滿量程計算）';});
+$('rd').onclick=()=>run('讀 EEPROM',async()=>{
+  const a=parseNumber($('addr').value,255),r=await command(0x05,a);
+  return `[0x${a.toString(16)}] = ${r.value} (0x${r.value.toString(16).padStart(4,'0')})`;
+});
+$('wr').onclick=()=>run('寫 EEPROM',async()=>{
+  const a=parseNumber($('addr').value,255),v=parseNumber($('val').value,0xffff);
+  await command(0x04,a,v);const r=await command(0x05,a);
+  return `[0x${a.toString(16)}] 寫入 ${v}，讀回 ${r.value}`;
+});
+async function disconnect(message){
+  connected=false;
+  await stopRecording();
+  if(fff1)fff1.removeEventListener('characteristicvaluechanged',receive);
+  if(device?.gatt.connected)device.gatt.disconnect();
+  $('state').textContent=message;render();
 }
 $('connect').onclick=async()=>{
   connecting=true;render();$('error').textContent='';
@@ -121,22 +301,20 @@ $('connect').onclick=async()=>{
     if(!navigator.bluetooth||!isSecureContext)throw Error('請用支援 Web Bluetooth 的 Chrome／Edge 開啟 localhost。');
     device=await navigator.bluetooth.requestDevice({filters:[{name:'BLE_capture_ITAP'}],optionalServices:[uuid('fff0')]});
     const selected=device;
-    device.addEventListener('gattserverdisconnected',()=>{if(recording&&device===selected)void stop('藍牙已斷線；本次資料保留，重新連線另開新記錄。');});
-    const server=await device.gatt.connect();
-    const service=await server.getPrimaryService(uuid('fff0'));
-    characteristic=await service.getCharacteristic(uuid('fff1'));
-    current={id:crypto.randomUUID(),started:new Date().toISOString(),device:device.name,format:1,
-      firmware:'ble_sensor_capture',acc_odr_hz:26,acc_range_g:8,acc_units:'raw int16; 0.244 mg/LSB',
-      ppg_time:'UART packet completion',acc_time:'DRDY poll/readout; no FIFO',reference:'module D3 is not independent ground truth'};
-    await transaction('sessions',store=>store.add(current));
-    decoder=new CaptureDecoder();totals={ppg:0,acc:0,gaps:0,bad:0,saved:0};start=performance.now();recording=true;
-    characteristic.addEventListener('characteristicvaluechanged',receive);
-    await characteristic.startNotifications();
-    $('state').textContent='已連線，持續記錄中。';await refresh();
-  }catch(e){await stop('未開始或連線失敗；已收到的資料仍保留。');error(e);}
+    device.addEventListener('gattserverdisconnected',()=>{if(connected&&device===selected)void disconnect('藍牙已斷線；已保存的記錄保留，可重新連線。');});
+    const service=await (await device.gatt.connect()).getPrimaryService(uuid('fff0'));
+    fff1=await service.getCharacteristic(uuid('fff1'));fff2=await service.getCharacteristic(uuid('fff2'));
+    decoder=new CaptureDecoder();for(const k in live)live[k]=[];config={};
+    totals={ppg:0,acc:0,gaps:0,bad:0,saved:0};
+    fff1.addEventListener('characteristicvaluechanged',receive);
+    await fff1.startNotifications();connected=true;
+    $('state').textContent='已連線，顯示即時波形（未記錄）。';
+  }catch(e){await disconnect('連線失敗。');error(e);}
   finally{connecting=false;render();}
 };
-$('stop').onclick=()=>void stop();$('sessions').onchange=render;
+$('disconnect').onclick=()=>void disconnect('已斷線。');
+$('record').onclick=async()=>{try{await startRecording();}catch(e){error(e);}render();};
+$('stop').onclick=()=>void stopRecording();$('sessions').onchange=render;
 for(const kind of ['ppg','acc','raw'])$(kind).onclick=async()=>{
   try{
     const id=$('sessions').value,records=await all('frames','session',id);
@@ -147,7 +325,7 @@ for(const kind of ['ppg','acc','raw'])$(kind).onclick=async()=>{
     setTimeout(()=>URL.revokeObjectURL(url),10000);
   }catch(e){error(e);}
 };
-addEventListener('beforeunload',e=>{if(recording||pending.size){e.preventDefault();e.returnValue='';}});
+addEventListener('beforeunload',e=>{if(current||pending.size){e.preventDefault();e.returnValue='';}});
 const open=indexedDB.open('itap-ble-capture',1);
 open.onupgradeneeded=()=>{
   open.result.createObjectStore('sessions',{keyPath:'id'});

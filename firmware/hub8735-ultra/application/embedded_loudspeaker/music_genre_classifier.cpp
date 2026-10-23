@@ -131,6 +131,8 @@ MusicGenreClassifier::MusicGenreClassifier()
       sum_(0.0f),
       sumCount_(0),
       streamStartMs_(0),
+      audioStart_(0),
+      middleStart_(false),
       error_(nullptr)
 {
 }
@@ -181,7 +183,9 @@ bool MusicGenreClassifier::begin(AmebaFatFS& fs, const char* filename)
                        (static_cast<uint32_t>(header[8]) << 7) | header[9]);
         if ((header[5] & 0x10) != 0) start += 10;
     }
-    if (fileSize > MIDDLE_START_MIN_BYTES && fileSize / 4 > start) start = fileSize / 4;
+    audioStart_ = start;
+    middleStart_ = fileSize > MIDDLE_START_MIN_BYTES && fileSize / 4 > start;
+    if (middleStart_) start = fileSize / 4;
     if (start >= fileSize || !file_.seek(start)) {
         cancel();
         error_ = "cannot seek to audio data";
@@ -200,6 +204,24 @@ bool MusicGenreClassifier::begin(AmebaFatFS& fs, const char* filename)
     sum_ = 0.0f;
     sumCount_ = 0;
     phase_ = Phase::Decoding;
+    return true;
+}
+
+// 1/4 處可能落在假的 sync word 上（解碼錯誤超過上限）：改從 ID3 之後重來一次，只退回一次。
+bool MusicGenreClassifier::retryFromStart()
+{
+    if (!middleStart_ || !file_.seek(audioStart_)) return false;
+    LOGD(TAG, "decode failed at 1/4 of the file; retrying from byte %lu", static_cast<unsigned long>(audioStart_));
+    middleStart_ = false;
+    cursor_ = encoded_;
+    bytes_ = 0;
+    eof_ = false;
+    sampleRate_ = 0;
+    decodeErrors_ = 0;
+    pcmSamples_ = 0;
+    phase_acc_ = 0.0f;
+    sum_ = 0.0f;
+    sumCount_ = 0;
     return true;
 }
 
@@ -255,7 +277,10 @@ MusicGenreClassifier::StepResult MusicGenreClassifier::decodeStep()
             continue;
         }
         if (error != ERR_MP3_NONE) {
-            if (++decodeErrors_ > MAX_DECODE_ERRORS) return fail("too many decode errors");
+            if (++decodeErrors_ > MAX_DECODE_ERRORS) {
+                if (retryFromStart()) continue;
+                return fail("too many decode errors");
+            }
             if (bytes_ > 0) { ++cursor_; --bytes_; }
             continue;
         }
@@ -267,7 +292,10 @@ MusicGenreClassifier::StepResult MusicGenreClassifier::decodeStep()
             info.outputSamps % info.nChans != 0 ||
             (sampleRate_ != 0 && sampleRate_ != static_cast<uint32_t>(info.samprate))) {
             // seek 之後 bit reservoir 缺資料時 Helix 可能回成功但 frame info 為空：當作錯誤略過。
-            if (++decodeErrors_ > MAX_DECODE_ERRORS) return fail("unsupported or inconsistent MP3 frame");
+            if (++decodeErrors_ > MAX_DECODE_ERRORS) {
+                if (retryFromStart()) continue;
+                return fail("unsupported or inconsistent MP3 frame");
+            }
             if (cursor_ == before && bytes_ > 0) { ++cursor_; --bytes_; }
             continue;
         }

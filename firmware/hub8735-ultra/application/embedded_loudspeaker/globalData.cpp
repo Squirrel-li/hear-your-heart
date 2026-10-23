@@ -35,8 +35,11 @@ bool appQueuesInit()
     uiCmdQueue      = createQueue("uiCmd", 4, sizeof(UiCommandElement));
     analysisCmdQueue = createQueue("analysisCmd", 4, sizeof(AnalysisCmdElement));
     bleCmdQueue     = createQueue("bleCmd", 4, sizeof(BleCmdElement));
+    i2cMutex        = xSemaphoreCreateMutex();
+    if (i2cMutex == nullptr) LOGE("MAIN", "i2c mutex create failed");
 
-    return bleRxFrameQueue &&
+    return i2cMutex &&
+           bleRxFrameQueue &&
            ppgSensorQueue &&
            ppgRawQueue &&
            accSensorQueue &&

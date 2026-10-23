@@ -34,6 +34,7 @@ private:
     bool startStreaming();
     void stopStreaming();
     void closeFile();
+    bool retryFromStart();
 
     Phase phase_;
     File file_;
@@ -52,6 +53,8 @@ private:
     float sum_;
     uint32_t sumCount_;
     uint32_t streamStartMs_;
+    uint32_t audioStart_;  // ID3 之後的第一個位元組
+    bool middleStart_;     // 目前是從 1/4 處開始解碼（失敗時可退回 audioStart_）
     const char* error_;
 };
 

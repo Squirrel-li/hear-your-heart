@@ -27,6 +27,7 @@ QueueHandle_t uiUpdateQueue = nullptr;
 QueueHandle_t bleTxQueue = nullptr;
 QueueHandle_t uiCmdQueue = nullptr;
 QueueHandle_t analysisCmdQueue = nullptr;
+SemaphoreHandle_t i2cMutex = nullptr;
 QueueHandle_t bleCmdQueue = nullptr;
 volatile SensorSource activePpgSource = SensorSource::Watch;
 volatile SensorSource activeImuSource = SensorSource::Local;
