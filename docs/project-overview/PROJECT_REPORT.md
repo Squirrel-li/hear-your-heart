@@ -114,7 +114,7 @@ HUB 收到資料時記錄自己的接收時間 `hub_rx_time_ms`，檢查封包�
 
 HUB 透過 SH1106 OLED 顯示感測值、BLE 狀態、播放曲目及課表進度，使用者透過上／下／OK 按鍵設定模式、來源與播放操作。手錶 OLED 顯示自身量測與連線狀態，按鍵控制顯示頁面。手動播放、暫停或停止優先於自動選曲。
 
-BLE Auto 模式在尚未連上時重試，已連線後失聯則轉為 Manual，等待使用者重新連線或啟用 Auto。Enjoy 尚未取得有效心率時等待；取得有效目標後失聯，沿用最後有效目標 BPM，但不自行解除暫停或停止。Train 依課表進度選曲，實際心率只供顯示。
+BLE Auto 模式在未連線時持續重試，已連線後失聯也維持 Auto 自動重連；只有使用者 Disconnect 或切換 Manual 時才停止重試。Enjoy 尚未取得有效心率時等待；取得有效目標後失聯，沿用最後有效目標 BPM，但不自行解除暫停或停止。Train 依課表進度選曲，實際心率只供顯示。
 
 ### 分析、選曲與播放
 
@@ -202,7 +202,7 @@ HUB 收到感測資料後，Enjoy 依有效心率產生目標歌曲 BPM；Train 
 
 硬體內部以 UART 傳送 PPG 模組資料與 BM7701 命令，以 I²C 讀取 LSM6DS3／操作 OLED，以 GPIO 讀取按鍵，以 I²S 輸出音訊。手錶的 PPG UART 設為 38400 baud、8N1；BM7701 使用名義 115200 baud，韌體包含時鐘校正設定以配合實際通訊。
 
-BLE 中，手錶為 Peripheral／GATT Server，HUB 為 Central／GATT Client。HUB 掃描目標、建立連線、探索服務並啟用 CCCD 通知後接收資料。手錶斷線後重新廣播；HUB 的 Auto 模式在尚未連上時重試，已連線後失聯則轉為 Manual，等待使用者重新連線或啟用 Auto。
+BLE 中，手錶為 Peripheral／GATT Server，HUB 為 Central／GATT Client。HUB 掃描目標、建立連線、探索服務並啟用 CCCD 通知後接收資料。手錶斷線後重新廣播；HUB 的 Auto 模式在未連線時持續重試，失聯後也維持 Auto 自動重連，只有使用者 Disconnect 或切換 Manual 時才停止。
 
 | GATT 項目             | 手錶使用的 UUID | 功能                                               |
 | --------------------- | --------------- | -------------------------------------------------- |
