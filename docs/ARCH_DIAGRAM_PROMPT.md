@@ -62,7 +62,7 @@ Queue（名稱照 `globalData.h`）：`bleRxFrameQueue`、`ppgSensorQueue`、`ac
 需在圖或圖例中表達的行為：
 - `analysisTask`：有效 PPG（`status==2` 且 HR≠0）→ HRmax → 穩定 Zone（越界 2% HRmax 並維持 10 s 才換區）→ 目標 BPM（1 Hz，上升每次最多 +5、下降立即）。只輸出目標 BPM，不碰播放。
 - `controlTask`：自動／手動模式；手動（play/pause/stop）優先，只有明確 `auto`／選 Enjoy／Train 才恢復；目前依目標 BPM ±5% 內符合者選曲，否則最近 BPM；播放失敗跳過、全失敗則停止。
-- `audioTask`：**唯一**呼叫 MAX98357 與**唯一**擁有 SD；回報 `Finished`／失敗；歌曲停止後才執行 BPM 掃描（Helix 解 MP3 → 單聲道 PCM → MiniBPM，最多 60 s）。
+- `audioTask`：**唯一**呼叫 MAX98357 與**唯一**擁有 SD；回報 `Finished`／失敗；歌曲停止後才執行 BPM 掃描（Helix 解 MP3 → 單聲道 PCM → `bpm_tempo.h`，最多 60 s）。
 - `UITask`：OLED 選單（Mode、Play/Pause、Stop、Volume、BPM Analysis、Songs）→ `uiCmdQueue` → `controlTask`。
 - 感測斷線：已有有效心率後失聯，沿用最後目標 BPM 繼續播放。
 
@@ -73,7 +73,7 @@ Queue（名稱照 `globalData.h`）：`bleRxFrameQueue`、`ppgSensorQueue`、`ac
 3. 回饋：`audioPlaybackEventQueue`（播畢／失敗）→ `controlTask`。
 4. 使用者：按鍵／序列埠 → `uiCmdQueue` → `controlTask`；`uiUpdateQueue` → OLED。
 5. 曲庫：SD 的 `music_library.json`（檔名、BPM、大小、FAT 日期時間；上限 1024 首；BPM=0 不參加自動選曲；寫入走 `.tmp`→`.bak` 備份）→ `controlTask` 選曲。
-6. 分析：使用者在 OLED 觸發 → `controlTask` 轉送 → `audioTask`（停止後）→ MiniBPM（BPM）／NPU（曲風）→ 更新 `music_library.json` → 回報完成／失敗。
+6. 分析：使用者在 OLED 觸發 → `controlTask` 轉送 → `audioTask`（停止後）→ `bpm_tempo.h`（BPM）／NPU（曲風）→ 更新 `music_library.json` → 回報完成／失敗。
 
 BLE frame（供邊上標註）：GATT service `524CACC0-3C17-D293-8E48-14FE2E4DA212`，notify `D002`（sensor→hub）、write `D001`（hub→sensor）；frame = `sensor_time_ms 4B | msgType 1B | payload`，Big-endian；`01` PPG 20B、`02` acc+gyro 21B、`03` Acc、`04` Gyro。
 
