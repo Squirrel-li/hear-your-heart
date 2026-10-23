@@ -257,7 +257,7 @@ struct UiUpdateElement {
     char filename[AUDIO_FILENAME_MAX];
 };
 
-// BLE link per device. Auto retries until connected and switches to Manual when the link drops;
+// BLE link per device. Auto retries whenever not connected, also after the link drops;
 // Manual scans only after a Connect command.
 enum class BleLinkState : uint8_t {
     Down,

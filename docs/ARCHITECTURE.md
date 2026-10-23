@@ -50,7 +50,7 @@
 - **Demo**：動態加速度分 0–4 級，新等級持續約 0.5 秒後切換 `/demo/DEMO_nn.mp3`。這些歌曲不加入一般曲庫與分析。本地 IMU 每 80 ms 讀取，手錶每秒上報；不推定外部綁帶頻率。
 - **曲庫／分析**：從 SD 的 music_library.json 載入，最多 1024 首。使用者可選新檔／未知 BPM 掃描或全部重分析，後者可重跑未變更歌曲；依序跑 BPM（`bpm_tempo.h`，2026-10-22 取代 MiniBPM）及 SDK YAMNet 曲風分析，結果存入曲庫；使用者可在曲庫清單或播放中把單曲 BPM x2／/2 修正，「全部重分析」會覆蓋修正。播放或暫停中請求直接拒絕；掃描中播放會取消分析，已存結果保留。寫入採 tmp／bak 換檔與備份回復。
 - **選曲**：有有效 BPM 即可參與自動選曲，曲風失敗不阻擋。目前只比較 BPM。首次／換 Zone 找目標 ±5% 內曲目，沒有則取最近；自然播畢無符合者可重播原曲。失敗曲目跳過，全部不可用則停止。未來可加入使用者的「期望曲風」選項。
-- **來源與連線**：PPG／IMU 各自可選 Chest、Watch、Local。BLE 支援兩條連線及各自 Auto／Manual；Auto 尚未連上時重試，連上後失聯轉 Manual；使用者可重新 Connect 或啟用 Auto。
+- **來源與連線**：PPG／IMU 各自可選 Chest、Watch、Local。BLE 支援兩條連線及各自 Auto／Manual；開機預設 Auto；Auto 未連線時持續重試，失聯後也維持 Auto 自動重連；使用者 Disconnect 或切 Manual 後才停止重試，Manual 時可手動 Connect。
 - **待機**：停止播放／分析、停用本地感測、斷開 BLE 並停掃描、關 OLED；長按 OK 喚醒，保留設定但不自行恢復播放。進度條目前使用動畫加曲庫就緒門檻，15 秒逾時可離開動畫。
 - **手錶變體**：ble_sensor 使用模組心率；ble_sensor_hr 使用自身 PPG 心率演算法，10 秒非重疊週期、首週期暖機，另送 0x15 原始 PPG 批次；ble_sensor_motion 使用參考 ACC 的抗運動心率試驗演算法，約每 5 秒更新，ACC 讀 26 Hz、上報 1 Hz，OLED 停用，尚未燒錄驗證。三者皆為 BLE_watch_ITAP、source=1。ble_sensor_motion 與 ble_sensor_capture 以 `#include` 共用 ble_sensor 的 main.c，修改該檔會同時影響三者。心率計算週期與通知頻率應分別描述。
 

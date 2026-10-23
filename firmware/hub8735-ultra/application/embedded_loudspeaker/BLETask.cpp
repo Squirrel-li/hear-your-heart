@@ -26,8 +26,8 @@ const UartUuidSet UART_UUID_SETS[] = {
 
 // One link per sensor, index = SensorSource (Chest, Watch). The frames themselves carry the
 // source in the msgType high nibble, so the link only decides whom to connect to.
-// Auto retries every BLE_RETRY_DELAY_MS until connected and turns into Manual when the link
-// drops; Manual scans only after a Connect command (BLE_MANUAL_TRIES attempts).
+// Auto retries every BLE_RETRY_DELAY_MS whenever not connected, also after the link drops;
+// Manual scans only after a Connect command (BLE_MANUAL_TRIES attempts).
 struct Link {
     const char* label;
     const char* name;      // advertised name
@@ -506,10 +506,7 @@ void BLETask(void* parameter) {
             }
             if (l.up && !linkAlive(l)) {
                 dropLink(l, "disconnected");
-                if (l.autoMode) {
-                    l.autoMode = false;
-                    LOGW(TAG, "%s: link lost, mode -> manual", l.label);
-                }
+                l.lastAttemptMs = millis();  // Auto links retry after BLE_RETRY_DELAY_MS
                 lastUiBleMs = millis() - 1000u;
             }
             if (l.up) continue;

@@ -111,7 +111,7 @@ ITAP「聽見你的心」以穿戴感測資料驅動音樂播放。系統有三�
 
 | 功能 | 目前實作與入口 |
 | --- | --- |
-| 感測與BLE | `BLETask`可同時連手錶與外部綁帶；PPG與IMU可各自選Chest／Watch／Local。各連線有Auto／Manual；Auto連上後失聯會轉Manual，不是永遠自動重連。0x05原始批次驗證長度後逐筆送`ppgRawQueue` |
+| 感測與BLE | `BLETask`可同時連手錶與外部綁帶；PPG與IMU可各自選Chest／Watch／Local。各連線有Auto／Manual，開機預設Auto；Auto未連線時持續重試，失聯後也維持Auto自動重連，只有使用者Disconnect或切Manual才轉Manual。0x05原始批次驗證長度後逐筆送`ppgRawQueue` |
 | 心率分析 | `analysisTask`由手錶／綁帶提供的有效心率，或由0x05原始PPG以`ppg_raw_hr.h`（與`ble_sensor_hr`同一演算法，10秒週期）自算的心率，產生穩定Zone與目標BPM；無效／逾時停止更新，控制端保留最後目標；加速度另供DEMO強度分析 |
 | 模式與播放 | Enjoy、Train 11分／5分課表、Manual手動選歌、DEMO五級強度。`controlTask`持有選曲、課表、手動優先與待機狀態 |
 | 音訊與曲庫 | `audioTask`負責SD、MAX98357播放與掃描；從`music_library.json`載入曲庫，跳過播放失敗曲目，BPM=0不自動選取 |
