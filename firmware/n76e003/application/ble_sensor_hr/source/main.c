@@ -134,8 +134,8 @@ unsigned char _sdcc_external_startup(void)
 #else
 #define PPG_TH1             (256 - 26)
 #endif
-#define PPG_SEND_START      1       /* 1 = at boot read the module's mode (EEPROM 0x01), write 0x04 (continuous  */
-                                    /* upload) if it differs, then send "start measure", see ppg_start().       */
+#define PPG_SEND_START      1       /* 1 = at boot read the module's mode (0x04 continuous upload) and IR / red */
+                                    /* LED limits, write the ones that differ, then send "start measure".     */
                                     /* 0 = leave the module as it is: it must then already be in timed /       */
                                     /* continuous upload mode; in ask-response mode (0x02/03) it sends no 55 B0 */
                                     /* frames by itself.                                                        */
@@ -700,73 +700,9 @@ static void UART0_Init(void)
 
 #if PPG_SEND_START
 /* Same module state as "bmh08002_control.py mode 4" + "start": continuous upload, one 55 B0 frame about */
-/* every 28 ms. The mode lives in the module's EEPROM, so it is read first and written only when it     */
-/* differs. A write takes 50 ms and no command may follow during that time; other commands need 6 ms.   */
+/* every 28 ms. LED limits and the read-then-write rule are in ../../ble_sensor/source/ppg_setup.h.     */
 #define PPG_MODE_VALUE      0x04
-#define PPG_REPLY_MS        100
-__code UINT8 ppg_read_cmd[8]  = { 0x55, 0xB1, 0x05, 0x01, 0x00, 0x00, 0xB7, 0xAA };   /* read EEPROM 0x01 */
-__code UINT8 ppg_mode_cmd[8]  = { 0x55, 0xB1, 0x04, 0x01, 0x00, 0x04, 0xBA, 0xAA };   /* EEPROM 0x01 = 0x0004 */
-__code UINT8 ppg_stop_cmd[8]  = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x01, 0xB3, 0xAA };
-__code UINT8 ppg_start_cmd[8] = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x00, 0xB2, 0xAA };
-__code UINT8 ppg_read_hdr[4]  = { 0x55, 0xB1, 0x05, 0x01 };
-UINT8 ppg_mode_ch = '?';                    /* shown on the OLED: '=' mode was already right, 'W' it was written */
-
-static void ppg_cmd(__code UINT8 *cmd, UINT16 wait_ms)      /* UART0 interrupt must be off */
-{
-    UINT8 i;
-    UINT16 t0;
-    for (i = 0; i < 8; i++)
-    {
-        TI = 0;
-        SBUF = cmd[i];
-        while (TI == 0);
-    }
-    TI = 0;
-    t0 = now_ms();
-    while ((UINT16)(now_ms() - t0) < wait_ms);
-}
-
-/* 1 = the module reports mode PPG_MODE_VALUE. No answer within PPG_REPLY_MS counts as "not right".   */
-/* The reply is 55 B1 05 01 hi lo CS AA; a streaming module sends 55 B0 frames in between, so look for  */
-/* the header byte by byte.                                                                          */
-static __bit ppg_mode_ok(void)
-{
-    UINT8 st = 0, c, hi = 0, lo = 0;
-    UINT16 t0;
-
-    RI = 0;
-    ppg_cmd(ppg_read_cmd, 0);
-    t0 = now_ms();
-    while ((UINT16)(now_ms() - t0) < PPG_REPLY_MS)
-    {
-        if (!RI) continue;
-        c = SBUF;
-        RI = 0;
-        if (st < 4)       st = (c == ppg_read_hdr[st]) ? st + 1 : (c == 0x55 ? 1 : 0);
-        else if (st == 4) { hi = c; st = 5; }
-        else if (st == 5) { lo = c; st = 6; }
-        else if (st == 6) st = (c == (UINT8)(0xB1 + 0x05 + 0x01 + hi + lo)) ? 7 : 0;
-        else if (c == 0xAA) return hi == 0 && lo == PPG_MODE_VALUE;
-        else st = 0;
-    }
-    return 0;
-}
-
-static void ppg_start(void)
-{
-    clr_ES;
-    if (ppg_mode_ok())
-        ppg_mode_ch = '=';
-    else
-    {
-        ppg_cmd(ppg_mode_cmd, 60);
-        ppg_cmd(ppg_stop_cmd, 10);
-        ppg_mode_ch = 'W';
-    }
-    ppg_cmd(ppg_start_cmd, 10);
-    RI = 0;                                 /* drop the replies, the parser starts clean */
-    set_ES;
-}
+#include "../../ble_sensor/source/ppg_setup.h"
 #endif
 
 static void hr_task(UINT16 t)
@@ -992,7 +928,7 @@ static void oled_hw_init(void)
     for (i = 0; i < sizeof(oled_init_seq); i++)
         if (!i2c_tx(oled_init_seq[i], 0x28)) { i2c_stop(); return; }
     i2c_stop();
-    oled_redraw();                          /* text rows cover the whole panel, the waveform clears it first */
+    ln_dirty = 0xFF;                        /* text rows cover the whole panel; the waveform keeps its column */
     oled_ok = 1;
 }
 
@@ -1217,7 +1153,7 @@ static void oled_build(UINT8 row, UINT8 state)
         break;
     case 2:
         ln_s("HR-FW UP ");   ln_time(uptime_ms());      /* "HR-FW" marks this variant (own heart rate), the original shows "UP" */
-        ln_s(" M:");         ln_c(ppg_mode_ch);         /* module mode at boot: '=' already continuous, 'W' written */
+        ln_s(" M:");         ln_c(ppg_mode_ch);         /* module setup at boot: '=' all right, 'W' written */
         break;
     case 3:
         if      (!disp_ok) ln_s("PPG:NO SIGNAL");

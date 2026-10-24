@@ -12,7 +12,7 @@
 - 核心：`../ble_sensor_hr/source/ppg_motion_hr.h`，純整數、無 heap、無 FFT、無完整波形視窗。
 - 本專案 `source/main.c` 啟用 `ITAP_MOTION_HR`，沿用 `ble_sensor` 的 UART、I²C、BM7701 連線與啟動流程。
 - PPG 每約28 ms處理一次；三軸 ACC 26 Hz、±8 g、保留重力，演算法內移除基線。gyro 停用。
-- OLED 與正式手錶相同，P3.0切換PPG／IMU／波形三頁（2026-10-25）；文字頁快取改為每行2 B雜湊碼，才放得進XRAM。OLED每筆PPG約多佔3～4 ms I2C，與ACC 2 ms輪詢共用匯流排，P1.7可關閉螢幕停止佔用。這是獨立試驗配置，不更改正式架構規則。
+- OLED 與正式手錶相同，P3.0切換PPG／IMU／波形三頁（2026-10-25）；文字頁快取改為每行2 B雜湊碼，才放得進XRAM。OLED每筆PPG約多佔3～4 ms I2C，與ACC 2 ms輪詢共用匯流排，P1.7可關閉螢幕停止佔用。波形頁的「突然大砍自動接上」因Flash不足（差約240 B）在motion關閉（`WAVE_NO_JOIN`）。這是獨立試驗配置，不更改正式架構規則。
 - BLE 名稱 `BLE_watch_ITAP`，PPG msgType=0x11，約每5秒送一次本機心率結果；失去有效性時盡快送0。
   ACC 使用0x13封包，讀取26 Hz但對 HUB 上報1 Hz。不適用只接受 `BLE_capture_ITAP` 的擷取頁。
 - PPG封包 byte11 是自算 HR；status=2 表示自算 HR 有效，不再表示模組 D3 的有效性。
@@ -47,9 +47,9 @@ reason：0有效、1暖機、2訊號不足、3動作頻率歧義、4雙路不一
 | 演算法狀態 `sizeof(motion_hr)`，SDCC／s51實測 | **171 B** |
 | 同一結構在host GCC | 174 B，差異為對齊 padding |
 | 演算法profile程式 XRAM（含編譯器暫存、事件索引與測試結果） | 見重新執行產生的 `.mem`；不是只算sizeof |
-| **整套試驗韌體 XRAM** | **725／768 B，約94.4%**（2026-10-25加OLED後；加OLED前601 B） |
-| **整套試驗韌體 Flash** | **17,459／18,432 B，約94.7%**（加OLED前12,185 B） |
-| 內部RAM stack起始配置 | `.map` 的 `s_SSEG=0x5C`（加OLED前0x51）；不能把768 B XRAM餘量當成堆疊餘量 |
+| **整套試驗韌體 XRAM** | **742／768 B，約96.6%**（2026-10-25加OLED後；加OLED前601 B） |
+| **整套試驗韌體 Flash** | **18,225／18,432 B，約98.9%，只剩207 B**（加OLED前12,185 B） |
+| 內部RAM stack起始配置 | `.map` 的 `s_SSEG=0x66`（加OLED前0x51）；不能把768 B XRAM餘量當成堆疊餘量 |
 | 分析＋profile迴圈負荷 | **約0.7212–0.7578 MIPS** |
 | clean測試中單筆PPG最大指令數 | **42,242**，包括區間結算路徑 |
 | clean測試中單筆ACC最大指令數 | **9,945** |

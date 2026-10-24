@@ -139,9 +139,9 @@ unsigned char _sdcc_external_startup(void)
 #else
 #define PPG_TH1             (256 - 26)
 #endif
-#define PPG_SEND_START      1       /* 1 = at boot read the module's mode (EEPROM 0x01), write the factory     */
-                                    /* default 0x00 (timed upload) if it differs, then send "start measure",  */
-                                    /* see ppg_start().                                                         */
+#define PPG_SEND_START      1       /* 1 = at boot read the module's mode and IR / red LED limits (EEPROM      */
+                                    /* 0x01..0x08), write the ones that differ, then send "start measure",    */
+                                    /* see ppg_setup.h.                                                         */
                                     /* 0 = leave the module as it is: it must then already be in timed /       */
                                     /* continuous upload mode; in ask-response mode (0x02/03) it sends no 55 B0 */
                                     /* frames by itself.                                                        */
@@ -704,80 +704,15 @@ static void UART0_Init(void)
 }
 
 #if PPG_SEND_START
-/* Factory default module state (datasheet: EEPROM 0x01 = 0x0000, timed upload, red LED off) + "start". */
-/* ble_sensor_hr writes mode 4 (continuous upload) into the same EEPROM, so a module moved between the  */
-/* boards keeps it: the mode is read first and written back only when it differs. The timed upload     */
-/* interval (EEPROM 0x0A) is left as it is. A write takes 50 ms and no command may follow during that   */
-/* time; other commands need 6 ms.                                                                      */
+/* Mode: datasheet factory default 0x0000 (timed upload, red LED off); capture / motion use continuous */
+/* upload. LED limits and the read-then-write rule are in ppg_setup.h. The timed upload              */
+/* interval (EEPROM 0x0A) is left as it is.                                                          */
 #ifdef ITAP_FAST_SENSOR
 #define PPG_MODE_VALUE      0x04       /* continuous waveform upload */
 #else
 #define PPG_MODE_VALUE      0x00
 #endif
-#define PPG_REPLY_MS        100
-__code UINT8 ppg_read_cmd[8]  = { 0x55, 0xB1, 0x05, 0x01, 0x00, 0x00, 0xB7, 0xAA };   /* read EEPROM 0x01 */
-__code UINT8 ppg_mode_cmd[8]  = { 0x55, 0xB1, 0x04, 0x01, 0x00, PPG_MODE_VALUE, (UINT8)(0xB6 + PPG_MODE_VALUE), 0xAA };
-__code UINT8 ppg_stop_cmd[8]  = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x01, 0xB3, 0xAA };
-__code UINT8 ppg_start_cmd[8] = { 0x55, 0xB1, 0x01, 0x00, 0x00, 0x00, 0xB2, 0xAA };
-__code UINT8 ppg_read_hdr[4]  = { 0x55, 0xB1, 0x05, 0x01 };
-UINT8 ppg_mode_ch = '?';                    /* shown on the OLED: '=' mode was already right, 'W' it was written */
-
-static void ppg_cmd(__code UINT8 *cmd, UINT16 wait_ms)      /* UART0 interrupt must be off */
-{
-    UINT8 i;
-    UINT16 t0;
-    for (i = 0; i < 8; i++)
-    {
-        TI = 0;
-        SBUF = cmd[i];
-        while (TI == 0);
-    }
-    TI = 0;
-    t0 = now_ms();
-    while ((UINT16)(now_ms() - t0) < wait_ms);
-}
-
-/* 1 = the module reports mode PPG_MODE_VALUE. No answer within PPG_REPLY_MS counts as "not right".   */
-/* The reply is 55 B1 05 01 hi lo CS AA; a streaming module sends 55 B0 frames in between, so look for  */
-/* the header byte by byte.                                                                          */
-static __bit ppg_mode_ok(void)
-{
-    UINT8 st = 0, c, hi = 0, lo = 0;
-    UINT16 t0;
-
-    RI = 0;
-    ppg_cmd(ppg_read_cmd, 0);
-    t0 = now_ms();
-    while ((UINT16)(now_ms() - t0) < PPG_REPLY_MS)
-    {
-        if (!RI) continue;
-        c = SBUF;
-        RI = 0;
-        if (st < 4)       st = (c == ppg_read_hdr[st]) ? st + 1 : (c == 0x55 ? 1 : 0);
-        else if (st == 4) { hi = c; st = 5; }
-        else if (st == 5) { lo = c; st = 6; }
-        else if (st == 6) st = (c == (UINT8)(0xB1 + 0x05 + 0x01 + hi + lo)) ? 7 : 0;
-        else if (c == 0xAA) return hi == 0 && lo == PPG_MODE_VALUE;
-        else st = 0;
-    }
-    return 0;
-}
-
-static void ppg_start(void)
-{
-    clr_ES;
-    if (ppg_mode_ok())
-        ppg_mode_ch = '=';
-    else
-    {
-        ppg_cmd(ppg_mode_cmd, 60);
-        ppg_cmd(ppg_stop_cmd, 10);
-        ppg_mode_ch = 'W';
-    }
-    ppg_cmd(ppg_start_cmd, 10);
-    RI = 0;                                 /* drop the replies, the parser starts clean */
-    set_ES;
-}
+#include "ppg_setup.h"
 #endif
 
 #ifdef ITAP_CAPTURE
@@ -1004,6 +939,9 @@ __code const UINT8 oled_init_seq[] = {     /* SH1106: page addressing only, no 0
     0xAF                /* display on                         */
 };
 
+#ifdef ITAP_MOTION_HR
+#define WAVE_NO_JOIN        1               /* shortcut: motion has no flash left (~240 B short) for joining cuts, add it once the HR code shrinks */
+#endif
 #include "oled_wave.h"
 __xdata wave_state wave;
 
@@ -1025,7 +963,9 @@ static void oled_hw_init(void)
     for (i = 0; i < sizeof(oled_init_seq); i++)
         if (!i2c_tx(oled_init_seq[i], 0x28)) { i2c_stop(); return; }
     i2c_stop();
-    oled_redraw();                          /* text rows cover the whole panel, the waveform clears it first */
+#ifdef OLED_TEXT
+    ln_dirty = 0xFF;                        /* text rows cover the whole panel */
+#endif                                      /* the waveform keeps its column: the sweep repaints the panel */
     oled_ok = 1;
 }
 
@@ -1305,7 +1245,7 @@ static void oled_build(UINT8 row, UINT8 state)
     case 2:
         ln_s("UP  ");   ln_time(uptime_ms());
 #if PPG_SEND_START
-        ln_s(" M:");    ln_c(ppg_mode_ch);      /* module mode at boot: '=' already default, 'W' written */
+        ln_s(" M:");    ln_c(ppg_mode_ch);      /* module setup at boot: '=' all right, 'W' written */
 #endif
         break;
     case 3:

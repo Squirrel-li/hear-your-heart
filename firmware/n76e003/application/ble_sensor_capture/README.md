@@ -15,7 +15,7 @@
 | ACC | LSM6DS3，0x6B，26 Hz，±8 g，gyro 關閉，高通關閉，保留重力 |
 | ACC 封包 | 0x13，15 B，三軸 signed int16，0.244 mg/LSB |
 | 同步 | 共用 N76E003 毫秒時鐘；PPG 記 UART 封包收完時間，ACC 記 DRDY 輪詢後的讀取時間 |
-| 介面 | OLED 只有 IR／紅光 PPG 掃描波形頁（每筆 PPG 約 3～4 ms I2C，可能增加漏樣；P1.7 關螢幕即停止佔用），保留原有 LED 連線提示 |
+| 介面 | OLED 只有 IR／紅光 PPG 掃描波形頁（扣除約0.45秒基線後自動縮放，突然大砍會自動接上；每筆 PPG 約 3～4 ms I2C，可能增加漏樣；偶發 I2C 錯誤只略過該欄；P1.7 關螢幕即停止佔用），保留原有 LED 連線提示 |
 
 PPG 與 ACC 都沿用既有 big-endian 協定：`timestamp:u32 | type:u8 | sequence:u32 | payload`。
 兩種訊號各有自己的序號，不可拿 PPG 與 ACC 序號互相比較。
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 不同安裝位置可傳入 `-SdccHome`。
 
 輸出：`Release/ble_sensor_capture.hex`（Intel HEX）。腳本不燒錄、不改 MCU Config。
-2026-10-25 實際編譯連結（含 BMH08002-4 轉送與 OLED 波形頁）：**XRAM 473 B／768 B，Flash 8,806 B／18,432 B**（移除未使用的文字頁）。
+2026-10-25 實際編譯連結（含 BMH08002-4 轉送與 OLED 波形頁）：**XRAM 502 B／768 B，Flash 10,056 B／18,432 B**（移除未使用的文字頁）。
 這是靜態連結數值，不是最壞執行時堆疊驗證。
 
 使用原本 Nu-Link／NuEclipse 燒錄流程。UART1 的 P1.6／P0.2 與 ICP 共用：
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 不要讓 Debug launch 的 Config「Write」意外重寫 Config0。
 感測器／OLED 的接線沿用 `ble_sensor`；本版本不要求額外硬體。
 
-第一次執行會讀取 BMH08002-4 EEPROM 0x01；若不是 0x04，寫成連續模式並啟動量測。
+每次開機會讀取 BMH08002-4 EEPROM 0x01（mode）與 0x02～0x08（光強上下限），與目標（mode 0x04、IR 24000～30000、紅光 29000～30000）不同的才寫入，再啟動量測（`ble_sensor/source/ppg_setup.h`，四個手錶版本共用）。光強是 2026-10-25 在 capture 網頁實測後選定；兩者都設 18000～30000 時模組停在 status 1（有手指無數據）。
 這個模式會保留在模組中。之後燒回一般 `ble_sensor` 會由其開機流程恢復 0x00；
 `ble_sensor_hr` 本來就使用連續模式。
 
@@ -78,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 
 記錄頁的「BMH08002-4 設定」區經 FFF2 cmd opcode 0x02 轉送模組指令（格式見 `ble-notify-data-format.md` 第6節）：
 讀寫 mode、ir/red 光強上下限、interval，開始／停止量測、校正靈敏度，以及任意 EEPROM 位址讀寫。
-設定寫在模組 EEPROM，斷電後仍保留；本韌體開機會把 mode 改回 4。每個指令讓 PPG 中斷最多約0.5秒（序號缺口），
+設定寫在模組 EEPROM，斷電後仍保留；本韌體開機會把 mode 與光強改回上述目標值。每個指令讓 PPG 中斷最多約0.5秒（序號缺口），
 記錄中下的指令與結果會寫進該筆記錄的 JSON。其他手錶韌體不支援此指令。
 
 每次連線都是新的記錄。記錄寫入瀏覽器 IndexedDB，重新整理後可選舊記錄；

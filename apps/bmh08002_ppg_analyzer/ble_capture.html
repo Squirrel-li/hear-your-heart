@@ -14,7 +14,8 @@ body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-wid
 <output id="latest" aria-live="off"></output>
 <p id="scales"></p>
 <button id="lockScale">以目前範圍固定</button><button id="autoScale">全部改回自動</button>
-<p><small>縱軸上下限都填寫時固定不動，超出範圍的點畫在邊界上；任一欄空白就依最近 10 秒的最小／最大值自動縮放。</small></p>
+<p><label class="inline">PPG 跳動接上門檻 <input id="jump" size="6" inputmode="decimal" placeholder="自動"></label></p>
+<p><small>縱軸上下限都填寫時固定不動，超出範圍的點畫在邊界上；任一欄空白就依最近 10 秒的最小／最大值自動縮放。PPG 突然大砍時，之後的波形整段平移接上前一點（只影響畫面，記錄與匯出仍是原始值）。門檻空白＝自動：相鄰兩筆差超過最近平常起伏的 8 倍就接上；填數字＝固定門檻；0＝不處理。</small></p>
 </section>
 </div><div>
 <section><h2>1. 連線與記錄</h2>
@@ -25,7 +26,7 @@ body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-wid
 <p><small>連線後只顯示即時波形、不寫入資料；按「開始記錄」才建立一筆新記錄，可多次開始／停止而不必斷線。活動標記記錄的是操作當下的標記，並非精準動作起始時間。手錶模組心率不是獨立驗證真值。關閉 HUB 的自動連線，避免它占用手錶連線。</small></p>
 </section>
 <section><h2>BMH08002-4 設定</h2>
-<p><small>設定寫在模組自己的 EEPROM，斷電後仍保留。capture 韌體每次開機會把 mode 改回 4（連續上傳），所以 mode 的修改只維持到下次開機；mode 只建議用 4（連續上傳）或 12（連續上傳＋滿量程值手動更新），其他值會讓即時波形停止；interval 只用於定時上傳模式。光強欄位的最小值必須小於最大值。每個指令會讓 PPG 中斷最多約 0.5 秒，記錄中會出現序號缺口；記錄中下的指令也會寫進該筆記錄的 JSON。</small></p>
+<p><small>設定寫在模組自己的 EEPROM，斷電後仍保留。capture 韌體每次開機會把 mode 改回 4（連續上傳）、IR 光強改回 24000～30000、紅光改回 29000～30000，所以這幾欄的修改只維持到下次開機（要換預設值請改 ppg_setup.h）；mode 只建議用 4（連續上傳）或 12（連續上傳＋滿量程值手動更新），其他值會讓即時波形停止；interval 只用於定時上傳模式。光強欄位的最小值必須小於最大值。每個指令會讓 PPG 中斷最多約 0.5 秒，記錄中會出現序號缺口；記錄中下的指令也會寫進該筆記錄的 JSON。</small></p>
 <div id="fields"></div>
 <button id="readAll" disabled>讀取全部</button><button id="writeAll" disabled>寫入已修改欄位</button>
 <p><button id="mStart" disabled>開始量測</button><button id="mStop" disabled>停止量測</button><button id="mCal" disabled>校正靈敏度</button></p>
@@ -153,9 +154,17 @@ $('lockScale').onclick=()=>{for(const [k] of TRACES){if(live[k].length<2)continu
   const [lo,hi]=liveRange(k),pad=Math.max(1,(hi-lo)*0.1);
   $('lo_'+k).value=Math.floor(lo-pad);$('hi_'+k).value=Math.ceil(hi+pad);}plot();};
 $('autoScale').onclick=()=>{for(const [k] of TRACES)$('lo_'+k).value=$('hi_'+k).value='';plot();};
+let steps={}; // per PPG trace: {last raw value, display offset, average |step| of normal samples, count}
+function joined(k,v){ // display only: a sudden cut is shifted away so the trace stays continuous
+  const s=steps[k]??={last:v,offset:0,avg:0,n:0},d=v-s.last,a=Math.abs(d),text=$('jump').value.trim();
+  const lim=text===''?(s.n>=16?8*s.avg:Infinity):Number(text); // auto: 8x the usual step after warm-up
+  if(lim>0&&a>lim)s.offset-=d;
+  else if(a>0){s.avg+=(a-s.avg)/(s.n<32?++s.n:32);} // flat no-data stretches do not shrink the average
+  s.last=v;return v+s.offset;
+}
 function show(sample){
   const t=sample.elapsed_s;
-  if(sample.kind==='ppg'){live.ir.push([t,sample.ir_ppg]);live.red.push([t,sample.red_ppg]);
+  if(sample.kind==='ppg'){live.ir.push([t,joined('ir',sample.ir_ppg)]);live.red.push([t,joined('red',sample.red_ppg)]);
     $('latest').textContent=`IR ${sample.ir_ppg}｜紅光 ${sample.red_ppg}｜status ${sample.status}｜模組 D3 ${sample.d1}`;}
   else live.acc.push([t,Math.hypot(sample.acc_x,sample.acc_y,sample.acc_z)]);
   for(const k in live)while(live[k].length&&live[k][0][0]<t-WINDOW_S)live[k].shift();
@@ -219,7 +228,7 @@ function receive(event){
     totals.bad++;
     if(record){record.error=e.message;save(record);}
     if(e.message.startsWith('reset_')){
-      decoder=new CaptureDecoder();for(const k in live)live[k]=[];
+      decoder=new CaptureDecoder();for(const k in live)live[k]=[];steps={};
       void stopRecording('偵測到裝置重啟或倒序封包；已停止記錄，可重新開始新記錄。');
     }
   }
@@ -308,7 +317,7 @@ $('connect').onclick=async()=>{
     device.addEventListener('gattserverdisconnected',()=>{if(connected&&device===selected)void disconnect('藍牙已斷線；已保存的記錄保留，可重新連線。');});
     const service=await (await device.gatt.connect()).getPrimaryService(uuid('fff0'));
     fff1=await service.getCharacteristic(uuid('fff1'));fff2=await service.getCharacteristic(uuid('fff2'));
-    decoder=new CaptureDecoder();for(const k in live)live[k]=[];config={};
+    decoder=new CaptureDecoder();for(const k in live)live[k]=[];steps={};config={};
     totals={ppg:0,acc:0,gaps:0,bad:0,saved:0};
     fff1.addEventListener('characteristicvaluechanged',receive);
     await fff1.startNotifications();connected=true;
