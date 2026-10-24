@@ -73,7 +73,7 @@ constexpr uint8_t MODE_COUNT = 4;  // PlayMode values in order: Enjoy, Train, Ma
 constexpr uint8_t SOURCE_LIST_COUNT = 3;
 constexpr uint8_t BLE_LIST_COUNT = 5;  // Chest link, Chest mode, Watch link, Watch mode, Back
 constexpr uint8_t SOURCE_COUNT = 3;  // Chest, Watch, Local
-constexpr uint8_t BPM_ANALYSIS_COUNT = 3;  // New / unknown, Reanalyze all, Clear all results
+constexpr uint8_t BPM_ANALYSIS_COUNT = 4;  // New / unknown, Reanalyze all, Clear all results, Cancel
 constexpr uint8_t POWER_CONFIRM_COUNT = 2;
 constexpr uint8_t VOLUME_STEP = 10;
 constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
@@ -351,6 +351,10 @@ void activateItem()
         backToTop(TopVolume);
         break;
     case Screen::BpmAnalysisList: {
+        if (cursor == 3) {
+            backToTop(TopBpmAnalysis);
+            break;
+        }
         if (cursor == 2) {
             openList(Screen::ClearConfirm, 0);  // default to Cancel against a stray press
             break;
@@ -613,7 +617,8 @@ void itemLabel(uint16_t item, char* out, size_t size)
                  item * VOLUME_STEP == volumePercent ? " *" : "");
         return;
     case Screen::BpmAnalysisList:
-        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : item == 1 ? "Reanalyze all BPM" : "Clear all results");
+        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : item == 1 ? "Reanalyze all BPM"
+                                : item == 2 ? "Clear all results" : "Cancel");
         return;
     case Screen::SourceList:
         if (item >= 2) snprintf(out, size, "OK: Back");
