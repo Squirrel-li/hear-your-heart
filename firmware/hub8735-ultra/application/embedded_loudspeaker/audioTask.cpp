@@ -74,6 +74,7 @@ const char* audioCommandName(AudioCommandType type)
     case AudioCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
     case AudioCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
     case AudioCommandType::SetSongBpm: return "SetSongBpm";
+    case AudioCommandType::ClearAnalysisResults: return "ClearAnalysisResults";
     }
     return "?";
 }
@@ -641,6 +642,28 @@ void handleAudioCommand(AudioCmdElement& command)
             entry.bpm = previous;
             LOGE(BPM_TAG, "BPM correction not saved; %s keeps %u", entry.file, static_cast<unsigned>(previous));
         }
+        break;
+    }
+
+    case AudioCommandType::ClearAnalysisResults: {
+        // Every song loses its BPM (user corrections too) and genre, so automatic selection skips it
+        // until it is analyzed again. A running scan is cancelled first so it cannot refill them.
+        if (bpmScan.requested || bpmScan.running) {
+            LOGW(BPM_TAG, "scan cancelled: clearing all analysis results");
+            finishBpmScan(BpmAnalysisState::Cancelled);
+        }
+        musicBpmAnalysisBusy = true;
+        for (size_t i = 0; i < musicLibrary.count; ++i) {
+            musicLibrary.entries[i].bpm = 0;
+            musicLibrary.entries[i].genre[0] = '\0';
+        }
+        if (musicLibrarySave(fs, musicLibrary)) {
+            LOGI(BPM_TAG, "all analysis results cleared (%u songs)", static_cast<unsigned>(musicLibrary.count));
+        } else {
+            LOGE(BPM_TAG, "clear not saved; reloading the catalog from SD");
+            musicLibraryLoad(fs);
+        }
+        musicBpmAnalysisBusy = false;
         break;
     }
 

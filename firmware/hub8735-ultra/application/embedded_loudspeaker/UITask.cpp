@@ -65,14 +65,15 @@ enum class Screen : uint8_t {
     SongMenu,      // one song: [Play] / BPM x2 / BPM /2 / Back (Play only when opened from SongList)
     SourceList,    // PPG / IMU (OK cycles Chest/Watch/Local) / Back
     BleList,       // per device: link (OK connects / disconnects), mode (OK toggles Auto/Manual); Back
-    PowerConfirm   // Cancel / Power off
+    PowerConfirm,  // Cancel / Power off
+    ClearConfirm   // Cancel / Clear all (BPM and genre results)
 };
 
 constexpr uint8_t MODE_COUNT = 4;  // PlayMode values in order: Enjoy, Train, Manual, Demo
 constexpr uint8_t SOURCE_LIST_COUNT = 3;
 constexpr uint8_t BLE_LIST_COUNT = 5;  // Chest link, Chest mode, Watch link, Watch mode, Back
 constexpr uint8_t SOURCE_COUNT = 3;  // Chest, Watch, Local
-constexpr uint8_t BPM_ANALYSIS_COUNT = 2;
+constexpr uint8_t BPM_ANALYSIS_COUNT = 3;  // New / unknown, Reanalyze all, Clear all results
 constexpr uint8_t POWER_CONFIRM_COUNT = 2;
 constexpr uint8_t VOLUME_STEP = 10;
 constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
@@ -221,6 +222,7 @@ uint16_t itemCount()
     case Screen::SourceList: return SOURCE_LIST_COUNT;
     case Screen::BleList: return BLE_LIST_COUNT;
     case Screen::PowerConfirm: return POWER_CONFIRM_COUNT;
+    case Screen::ClearConfirm: return POWER_CONFIRM_COUNT;
     default: return topRowCount();
     }
 }
@@ -250,6 +252,7 @@ const char* screenName(Screen value)
     case Screen::SourceList: return "SourceList";
     case Screen::BleList: return "BleList";
     case Screen::PowerConfirm: return "PowerConfirm";
+    case Screen::ClearConfirm: return "ClearConfirm";
     }
     return "?";
 }
@@ -348,6 +351,10 @@ void activateItem()
         backToTop(TopVolume);
         break;
     case Screen::BpmAnalysisList: {
+        if (cursor == 2) {
+            openList(Screen::ClearConfirm, 0);  // default to Cancel against a stray press
+            break;
+        }
         const bool newOrUnknown = cursor == 0;
         const UiCommandType command = newOrUnknown
             ? UiCommandType::AnalyzeNewOrUnknownBpm
@@ -433,6 +440,13 @@ void activateItem()
         }
         break;
     }
+    case Screen::ClearConfirm:
+        if (cursor == 1) {
+            LOGI(TAG, "clear all analysis results requested from menu");
+            sendCommand(UiCommandType::ClearAnalysisResults);
+        }
+        backToTop(TopBpmAnalysis);
+        break;
     case Screen::PowerConfirm:
         // Standby starts only once controlTask has the command.
         if (cursor == 1 && sendCommand(UiCommandType::PowerOff)) powerOffRequested = true;
@@ -599,7 +613,7 @@ void itemLabel(uint16_t item, char* out, size_t size)
                  item * VOLUME_STEP == volumePercent ? " *" : "");
         return;
     case Screen::BpmAnalysisList:
-        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : "Reanalyze all BPM");
+        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : item == 1 ? "Reanalyze all BPM" : "Clear all results");
         return;
     case Screen::SourceList:
         if (item >= 2) snprintf(out, size, "OK: Back");
@@ -614,6 +628,9 @@ void itemLabel(uint16_t item, char* out, size_t size)
         return;
     case Screen::PowerConfirm:
         snprintf(out, size, "%s", item == 0 ? "Cancel" : "Power off");
+        return;
+    case Screen::ClearConfirm:
+        snprintf(out, size, "%s", item == 0 ? "Cancel" : "Clear BPM + genre");
         return;
     case Screen::SongList:
         if (item >= musicLibrary.count) {
