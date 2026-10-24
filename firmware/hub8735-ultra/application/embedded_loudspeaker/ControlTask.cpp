@@ -471,7 +471,7 @@ void startBpmAnalysis(BpmAnalysisMode mode)
         ? AudioCommandType::AnalyzeNewOrUnknownBpm
         : AudioCommandType::ReanalyzeAllBpm;
 
-    // audioTask raises musicBpmAnalysisBusy only while a scan really runs (never during playback).
+    // Accepted during playback too: audioTask analyzes between decodes and keeps playback fed first.
     if (!sendAudioCommand(command)) {
         LOGE(TAG, "BPM analysis request could not be sent to audioTask");
         reportBpmAnalysis(BpmAnalysisState::Failed, mode, 0, 0, 0, 1);

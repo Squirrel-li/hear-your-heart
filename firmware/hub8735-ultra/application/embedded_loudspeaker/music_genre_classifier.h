@@ -8,7 +8,7 @@
 #include "music_library.h"
 
 // 以 NPU（YAMNet，模型由 SD 載入）辨識 MP3 的曲風。介面比照 MusicBpmAnalyzer，
-// 由 audioTask 在歌曲停止後呼叫，不新增 task。
+// 由 audioTask 在播放的空檔呼叫，不新增 task。
 // 流程：解碼一段 MP3 -> 16 kHz mono PCM（RAM）-> NN -> 累計各視窗的曲風分數 -> 取最高者。
 class MusicGenreClassifier {
 public:
@@ -22,7 +22,9 @@ public:
     bool begin(AmebaFatFS& fs, const char* filename);
     StepResult step(char genre[MUSIC_GENRE_MAX]);
     void cancel();     // 結束目前這首：關檔、停止串流、釋放 PCM
-    void shutdown();   // 掃描結束：關閉 NN 模組
+    // 從 SD 載入 NN 模型並常駐，不再關閉：播放中載入要數秒，會讓播放斷音，所以開機時先載入。
+    void loadModel();
+    bool modelLoaded() const;
     const char* error() const { return error_; }
 
 private:
