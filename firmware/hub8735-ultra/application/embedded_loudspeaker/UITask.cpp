@@ -889,8 +889,9 @@ void draw()
 
 constexpr uint32_t ANIM_FRAME_MS = 40;
 constexpr uint32_t BOOT_MIN_MS = 3000;
-// The bar waits at 80% for the music library; a missing SD card must not hold the menu forever.
-constexpr uint32_t BOOT_TIMEOUT_MS = 15000;
+// The bar follows audioBootProgress (SD, catalog, boot scan, NN model, amp) and the menu waits for 100%;
+// the timeout only keeps a stuck SD card from holding the menu forever (the NN model load takes seconds).
+constexpr uint32_t BOOT_TIMEOUT_MS = 30000;
 constexpr uint32_t POWER_OFF_MS = 1100;
 constexpr uint32_t WAKE_HOLD_MS = 2000;
 
@@ -978,17 +979,17 @@ void playBootAnimation()
     const uint32_t start = millis();
     for (;;) {
         const uint32_t elapsed = millis() - start;
-        const bool ready = musicLibraryReady || elapsed >= BOOT_TIMEOUT_MS;
-        uint32_t progress = elapsed * 100 / BOOT_MIN_MS;
-        if (progress > 100) progress = 100;
-        if (!ready && progress > 80) progress = 80;
+        const uint8_t stage = audioBootProgress;
+        const bool ready = stage >= 100 || elapsed >= BOOT_TIMEOUT_MS;
+        uint32_t progress = elapsed * 100 / BOOT_MIN_MS;  // the animation pace caps the bar
+        if (progress > stage) progress = stage;
         drawBootFrame(elapsed, static_cast<uint8_t>(progress));
         drainUpdates();
         if (ready && elapsed >= BOOT_MIN_MS) break;
         vTaskDelay(pdMS_TO_TICKS(ANIM_FRAME_MS));
     }
-    if (!musicLibraryReady) LOGW(TAG, "music library not ready after %lu ms; menu shown anyway",
-             static_cast<unsigned long>(BOOT_TIMEOUT_MS));
+    if (audioBootProgress < 100) LOGW(TAG, "boot not finished (stage %u%%) after %lu ms; menu shown anyway",
+             static_cast<unsigned>(audioBootProgress), static_cast<unsigned long>(BOOT_TIMEOUT_MS));
     lastRefreshMs = millis() - REFRESH_MS;  // the menu's first draw resends every page
 }
 

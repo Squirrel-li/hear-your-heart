@@ -36,6 +36,7 @@ UserInfo userInfo;
 volatile bool musicLibraryReady = false;
 volatile bool musicStorageReady = false;
 volatile bool musicBpmAnalysisBusy = false;
+volatile uint8_t audioBootProgress = 0;
 volatile bool systemStandby = false;
 
 void setup()

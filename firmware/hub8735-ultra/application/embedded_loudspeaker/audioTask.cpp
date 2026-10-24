@@ -9,6 +9,11 @@ namespace {
 
 constexpr const char* TAG = "AUDIO";
 constexpr const char* BPM_TAG = "BPMSCAN";
+// Playback first: each loop tops up the ring (about 3 s, MAX98357 RING_SLOTS) with up to this many frames,
+// and an analysis step runs only while at least ANALYSIS_MIN_BUFFER_MS is buffered, so a slow step
+// (catalog save, tempo estimate, directory scan) is covered by the audio already queued.
+constexpr unsigned PLAYBACK_FRAMES_PER_LOOP = 8;
+constexpr uint32_t ANALYSIS_MIN_BUFFER_MS = 1500;
 
 AmebaFatFS fs;
 MAX98357 amp;
@@ -145,7 +150,7 @@ void reportBpmAnalysis(BpmAnalysisState state, uint16_t current = 0,
 void finishBpmScan(BpmAnalysisState state)
 {
     bpmAnalyzer.cancel();
-    genreClassifier.shutdown();
+    genreClassifier.cancel();  // the NN model stays loaded
     bpmScan.phase = ScanPhase::Start;
     bpmScan.running = false;
     bpmScan.requested = false;
@@ -174,6 +179,8 @@ bool addBpmScanTrack(const char* filename, uint32_t fileSize, uint32_t fileModif
 
 bool beginBpmScan()
 {
+    // Only this synchronous step adds or resets catalog entries; controlTask defers selection meanwhile.
+    musicBpmAnalysisBusy = true;
     bpmScan.running = true;
     bpmScan.requested = false;
     bpmScan.phase = ScanPhase::Start;
@@ -278,10 +285,11 @@ bool beginBpmScan()
             continue;
         }
         if (isNew) {
-            index = static_cast<int>(musicLibrary.count++);
+            index = static_cast<int>(musicLibrary.count);
             memset(&musicLibrary.entries[index], 0, sizeof(MusicEntry));
             strncpy(musicLibrary.entries[index].file, track.filename,
                     sizeof(musicLibrary.entries[index].file) - 1);
+            ++musicLibrary.count;  // publish only a filled entry: controlTask and UITask read the catalog concurrently
             catalogChanged = true;
         }
 
@@ -319,6 +327,7 @@ bool beginBpmScan()
         return true;
     }
 
+    musicBpmAnalysisBusy = false;  // per-song results are single field writes; selection may go on
     reportBpmAnalysis(BpmAnalysisState::Running, 1,
                       bpmScan.tracks[0].filename);
     return true;
@@ -436,14 +445,21 @@ void advanceBpmScan()
     }
 }
 
-// Analysis never overlaps playback: a user-requested scan that is interrupted is discarded,
-// not resumed. Results already saved stay; unfinished files keep bpm 0 and are retried on request.
-void discardBpmScanForPlayback()
+// Boot-time discovery (user decision 2026-10-25: boot only): queue new, replaced and unanalyzed songs.
+// The directory scan and, when a song still needs a genre, the NN model load run here behind the boot
+// screen: loading the model takes seconds and would cut out playback if it happened later.
+void startBootScan()
 {
-    if (bpmScan.requested || bpmScan.running) {
-        LOGW(BPM_TAG, "playback started; discarding BPM scan (done %u of %u, unfinished files keep BPM 0)",
-             static_cast<unsigned>(bpmScan.index), static_cast<unsigned>(bpmScan.count));
-        finishBpmScan(BpmAnalysisState::Cancelled);
+    bpmScan.mode = BpmAnalysisMode::NewOrUnknown;
+    if (!beginBpmScan() || !bpmScan.running) return;
+    LOGI(BPM_TAG, "boot scan: %u songs queued", static_cast<unsigned>(bpmScan.count));
+    for (uint16_t i = 0; i < bpmScan.count; ++i) {
+        const int index = findLibraryEntry(bpmScan.tracks[i].filename);
+        if (index >= 0 && musicLibrary.entries[index].genre[0] == '\0') {
+            audioBootProgress = 70;
+            genreClassifier.loadModel();
+            return;
+        }
     }
 }
 
@@ -475,6 +491,41 @@ void reportAudioState(AudioState state, const char* filename = nullptr)
     xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
 }
 
+Mp3ProcessResult processPlayback()
+{
+    const Mp3ProcessResult result = amp.processMp3();
+    if (result == Mp3ProcessResult::Finished) {
+        LOGI(TAG, "playback finished%s", currentPlaybackAutomatic ? " (automatic)" : "");
+        if (currentPlaybackAutomatic) {
+            sendPlaybackEvent(
+                AudioPlaybackEventType::Finished,
+                currentAutomaticSongIndex);
+        }
+        currentPlaybackAutomatic = false;
+        currentAutomaticSongIndex = -1;
+        playbackPaused = false;
+        reportAudioState(AudioState::Stopped);
+    } else if (result == Mp3ProcessResult::Stopped) {
+        LOGD(TAG, "playback stopped");
+    } else if (result == Mp3ProcessResult::Paused) {
+        playbackPaused = true;
+        LOGD(TAG, "playback paused");
+    } else if (result == Mp3ProcessResult::Error) {
+        LOGE(TAG, "playback error: %s%s", amp.lastError(), currentPlaybackAutomatic ? " (automatic; skipping song)" : "");
+        if (currentPlaybackAutomatic) {
+            sendPlaybackEvent(
+                AudioPlaybackEventType::Failed,
+                currentAutomaticSongIndex);
+        }
+        amp.stopMp3();
+        currentPlaybackAutomatic = false;
+        currentAutomaticSongIndex = -1;
+        playbackPaused = false;
+        reportAudioState(AudioState::Stopped);
+    }
+    return result;
+}
+
 void handleAudioCommand(AudioCmdElement& command)
 {
     command.filename[sizeof(command.filename) - 1] = '\0';
@@ -501,7 +552,6 @@ void handleAudioCommand(AudioCmdElement& command)
             return;
         }
 
-        discardBpmScanForPlayback();
         amp.stopMp3();
         playbackPaused = false;
         currentPlaybackAutomatic = false;
@@ -574,11 +624,11 @@ void handleAudioCommand(AudioCmdElement& command)
 
     case AudioCommandType::SetSongBpm: {
         // User correction (x2 / /2). A later "reanalyze all" overwrites it (user decision 2026-10-22).
-        // The scan rewrites the library, so corrections wait until it is finished.
+        // Allowed during a scan: this task also runs the scan, so the save cannot interleave with it.
         const int index = findLibraryEntry(command.filename);
-        if (bpmScan.requested || bpmScan.running || index < 0 || command.bpm < 30 || command.bpm > 300) {
-            LOGW(BPM_TAG, "BPM correction rejected: '%s' -> %u (scan %d, index %d)", command.filename,
-                 static_cast<unsigned>(command.bpm), bpmScan.requested || bpmScan.running ? 1 : 0, index);
+        if (index < 0 || command.bpm < 30 || command.bpm > 300) {
+            LOGW(BPM_TAG, "BPM correction rejected: '%s' -> %u (index %d)", command.filename,
+                 static_cast<unsigned>(command.bpm), index);
             break;
         }
         MusicEntry& entry = musicLibrary.entries[index];
@@ -596,13 +646,7 @@ void handleAudioCommand(AudioCmdElement& command)
 
     case AudioCommandType::AnalyzeNewOrUnknownBpm:
     case AudioCommandType::ReanalyzeAllBpm:
-        if (amp.isMp3Playing() || playbackPaused) {
-            LOGW(BPM_TAG, "analysis request rejected: audio is %s", playbackPaused ? "paused" : "playing");
-            bpmScan.mode = command.command == AudioCommandType::AnalyzeNewOrUnknownBpm
-                ? BpmAnalysisMode::NewOrUnknown
-                : BpmAnalysisMode::All;
-            reportBpmAnalysis(BpmAnalysisState::Cancelled);  // not allowed during playback
-        } else if (!bpmScan.requested && !bpmScan.running) {
+        if (!bpmScan.requested && !bpmScan.running) {
             bpmScan.mode = command.command == AudioCommandType::AnalyzeNewOrUnknownBpm
                 ? BpmAnalysisMode::NewOrUnknown
                 : BpmAnalysisMode::All;
@@ -632,22 +676,29 @@ void audioTask(void* parameter)
         LOGE(TAG, "SD card mount FAILED after %lu ms; music disabled, library empty (check card/contacts/format)",
              static_cast<unsigned long>(millis() - sdStartMs));
         musicLibraryReady = true;  // An empty catalog must not block controlTask.
+        audioBootProgress = 100;
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     LOGI(TAG, "SD card mounted in %lu ms, root='%s'", static_cast<unsigned long>(millis() - sdStartMs),
          fs.getRootPath() != nullptr ? fs.getRootPath() : "?");
+    audioBootProgress = 20;
     const bool libraryLoaded = musicLibraryLoad(fs);
     LOGI(TAG, "music library %s: %u songs", libraryLoaded ? "loaded" : "NOT loaded (empty)",
          static_cast<unsigned>(musicLibrary.count));
+    audioBootProgress = 40;
+    startBootScan();
     musicLibraryReady = true;
+    audioBootProgress = 90;
 
     if (!amp.begin()) {
         LOGE(TAG, "MAX98357 amplifier init FAILED; playback disabled");
+        audioBootProgress = 100;
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     amp.setShutdownPin(AMP_SD_PIN);
     amp.setVolume(0.5f);
     musicStorageReady = true;
+    audioBootProgress = 100;
     LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pin D%u); audio storage ready",
          static_cast<unsigned>(AMP_SD_PIN));
 
@@ -669,46 +720,15 @@ void audioTask(void* parameter)
             handleAudioCommand(command);
         }
 
-        const bool audioActive = amp.isMp3Playing() || playbackPaused;
-        if (amp.isMp3Playing()) {
-            const Mp3ProcessResult result = amp.processMp3();
-            if (result == Mp3ProcessResult::Finished) {
-                LOGI(TAG, "playback finished%s", currentPlaybackAutomatic ? " (automatic)" : "");
-                if (currentPlaybackAutomatic) {
-                    sendPlaybackEvent(
-                        AudioPlaybackEventType::Finished,
-                        currentAutomaticSongIndex);
-                }
-                currentPlaybackAutomatic = false;
-                currentAutomaticSongIndex = -1;
-                playbackPaused = false;
-                reportAudioState(AudioState::Stopped);
-            } else if (result == Mp3ProcessResult::Stopped) {
-                LOGD(TAG, "playback stopped");
-            } else if (result == Mp3ProcessResult::Paused) {
-                playbackPaused = true;
-                LOGD(TAG, "playback paused");
-            } else if (result == Mp3ProcessResult::Error) {
-                LOGE(TAG, "playback error: %s%s", amp.lastError(), currentPlaybackAutomatic ? " (automatic; skipping song)" : "");
-                if (currentPlaybackAutomatic) {
-                    sendPlaybackEvent(
-                        AudioPlaybackEventType::Failed,
-                        currentAutomaticSongIndex);
-                }
-                amp.stopMp3();
-                currentPlaybackAutomatic = false;
-                currentAutomaticSongIndex = -1;
-                playbackPaused = false;
-                reportAudioState(AudioState::Stopped);
-            }
+        // Playback first: top up the ring, then spend the spare time on analysis.
+        for (unsigned i = 0; i < PLAYBACK_FRAMES_PER_LOOP && amp.isMp3Playing(); ++i) {
+            if (processPlayback() != Mp3ProcessResult::Playing) break;
         }
 
-        if (!audioActive && !amp.isMp3Playing() && !playbackPaused) {
-            if (bpmScan.requested || bpmScan.running) {
-                musicBpmAnalysisBusy = true;  // gate automatic selection while the catalog changes
-                if (bpmScan.requested) beginBpmScan();
-                if (bpmScan.running) advanceBpmScan();
-            }
+        if ((bpmScan.requested || bpmScan.running) &&
+            (!amp.isMp3Playing() || amp.mp3BufferedMs() >= ANALYSIS_MIN_BUFFER_MS)) {
+            if (bpmScan.requested) beginBpmScan();
+            if (bpmScan.running) advanceBpmScan();
         }
 
         if (amp.isMp3Playing() || playbackPaused || bpmScan.requested || bpmScan.running) {

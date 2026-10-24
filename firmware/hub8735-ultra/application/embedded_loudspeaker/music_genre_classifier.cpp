@@ -337,14 +337,7 @@ bool MusicGenreClassifier::startStreaming()
     badOutputSize = 0;
     for (int i = 0; i < GENRE_COUNT; ++i) genreScore[i] = 0;
 
-    // 模型來源由 Arduino 選單 LoadNNModelSource 決定（此處設為 SD）。掃描期間只開一次。
-    if (!nnStarted) {
-        audioNN.configAudio(nnAudioSetting);
-        yamnet_from_sd.postprocess = genrePostprocess;  // 須在 begin() 之前
-        audioNN.modelSelect(AUDIO_CLASSIFICATION, NA_MODEL, NA_MODEL, NA_MODEL, DEFAULT_YAMNET);
-        audioNN.begin();
-        nnStarted = true;
-    }
+    loadModel();
     pcmSource = new (std::nothrow) PcmArray();
     streamer = new (std::nothrow) StreamIO(1, 1);
     if (pcmSource == nullptr || streamer == nullptr || !pcmSource->begin(pcm_, pcmSamples_)) {
@@ -428,13 +421,22 @@ void MusicGenreClassifier::cancel()
     error_ = nullptr;
 }
 
-void MusicGenreClassifier::shutdown()
+void MusicGenreClassifier::loadModel()
 {
-    cancel();
-    if (nnStarted) {
-        audioNN.end();
-        nnStarted = false;
-    }
+    if (nnStarted) return;
+    // 模型來源由 Arduino 選單 LoadNNModelSource 決定（此處設為 SD）。
+    const uint32_t startMs = millis();
+    audioNN.configAudio(nnAudioSetting);
+    yamnet_from_sd.postprocess = genrePostprocess;  // 須在 begin() 之前
+    audioNN.modelSelect(AUDIO_CLASSIFICATION, NA_MODEL, NA_MODEL, NA_MODEL, DEFAULT_YAMNET);
+    audioNN.begin();
+    nnStarted = true;
+    LOGI(TAG, "NN model loaded in %lu ms (stays loaded)", static_cast<unsigned long>(millis() - startMs));
+}
+
+bool MusicGenreClassifier::modelLoaded() const
+{
+    return nnStarted;
 }
 
 void MusicGenreClassifier::closeFile()

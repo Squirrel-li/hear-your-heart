@@ -43,6 +43,8 @@ struct I2cLock {
 extern volatile bool musicLibraryReady;
 extern volatile bool musicStorageReady;
 extern volatile bool musicBpmAnalysisBusy;
+// 開機進度 0..100：audioTask 依初始化階段（SD、曲庫、開機掃描、NN 模型、喇叭）更新，開機畫面據此顯示並等到 100。
+extern volatile uint8_t audioBootProgress;
 // Software standby ("Power off"): written only by controlTask; BLETask and analysisTask
 // read it to drop the link / power down local sensors.
 extern volatile bool systemStandby;
