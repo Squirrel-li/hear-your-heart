@@ -45,6 +45,7 @@ const char* audioCommandName(AudioCommandType type)
     case AudioCommandType::ReanalyzeAllBpm: return "ReanalyzeAllBpm";
     case AudioCommandType::CancelBpmAnalysis: return "CancelBpmAnalysis";
     case AudioCommandType::SetSongBpm: return "SetSongBpm";
+    case AudioCommandType::ClearAnalysisResults: return "ClearAnalysisResults";
     }
     return "?";
 }
@@ -67,6 +68,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::PowerOn: return "PowerOn";
     case UiCommandType::RestartTrain: return "RestartTrain";
     case UiCommandType::SetSongBpm: return "SetSongBpm";
+    case UiCommandType::ClearAnalysisResults: return "ClearAnalysisResults";
     }
     return "?";
 }
@@ -500,7 +502,7 @@ void setSongBpm(int index, uint16_t bpm)
 // <song> is the index printed by "bpm list" or the file name.
 void handleBpmSerial(const String& input)
 {
-    static const char* const USAGE = "serial: usage: bpm list|new|all|cancel|x2 <song>|/2 <song>|set <song> <bpm>";
+    static const char* const USAGE = "serial: usage: bpm list|new|all|cancel|clear|x2 <song>|/2 <song>|set <song> <bpm>";
     String rest = input.substring(3);
     rest.trim();
     const int space = rest.indexOf(' ');
@@ -521,10 +523,11 @@ void handleBpmSerial(const String& input)
         startBpmAnalysis(verb == "new" ? BpmAnalysisMode::NewOrUnknown : BpmAnalysisMode::All);
         return;
     }
-    if (verb == "cancel") {
+    if (verb == "cancel" || verb == "clear") {
         AudioCmdElement command{};
-        command.command = AudioCommandType::CancelBpmAnalysis;
-        if (!sendAudioCommand(command)) LOGW(TAG, "cancel analysis command was not sent");
+        command.command = verb == "cancel" ? AudioCommandType::CancelBpmAnalysis
+                                           : AudioCommandType::ClearAnalysisResults;
+        if (!sendAudioCommand(command)) LOGW(TAG, "%s analysis command was not sent", verb.c_str());
         return;
     }
     if (verb != "x2" && verb != "/2" && verb != "set") {
@@ -657,6 +660,10 @@ void handleUiCommand(const UiCommandElement& cmd)
     case UiCommandType::CancelBpmAnalysis:
         command.command = AudioCommandType::CancelBpmAnalysis;
         if (!sendAudioCommand(command)) LOGW(TAG, "cancel analysis command was not sent");
+        break;
+    case UiCommandType::ClearAnalysisResults:
+        command.command = AudioCommandType::ClearAnalysisResults;
+        if (!sendAudioCommand(command)) LOGW(TAG, "clear analysis results command was not sent");
         break;
     case UiCommandType::SetPpgSource:
         sendAnalysisSource(AnalysisCmdType::SetPpgSource, cmd.source);

@@ -179,7 +179,8 @@ enum class AudioCommandType : uint8_t {
     AnalyzeNewOrUnknownBpm,
     ReanalyzeAllBpm,
     CancelBpmAnalysis,
-    SetSongBpm  // user x2 / /2: write bpm for filename into music_library.json
+    SetSongBpm,  // user x2 / /2: write bpm for filename into music_library.json
+    ClearAnalysisResults  // user: drop every song's BPM and genre (cancels a running scan)
 };
 
 struct AudioCmdElement {
@@ -305,7 +306,8 @@ enum class UiCommandType : uint8_t {
     PowerOff,  // enter software standby
     PowerOn,   // leave standby; playback stays stopped
     RestartTrain,  // restart the current Train plan from stage 1
-    SetSongBpm     // songIndex's BPM becomes bpm (user corrects x2 / /2)
+    SetSongBpm,    // songIndex's BPM becomes bpm (user corrects x2 / /2)
+    ClearAnalysisResults  // drop all BPM and genre results
 };
 
 struct UiCommandElement {
