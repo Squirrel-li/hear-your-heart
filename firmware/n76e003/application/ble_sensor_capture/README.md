@@ -15,7 +15,7 @@
 | ACC | LSM6DS3，0x6B，26 Hz，±8 g，gyro 關閉，高通關閉，保留重力 |
 | ACC 封包 | 0x13，15 B，三軸 signed int16，0.244 mg/LSB |
 | 同步 | 共用 N76E003 毫秒時鐘；PPG 記 UART 封包收完時間，ACC 記 DRDY 輪詢後的讀取時間 |
-| 介面 | OLED 更新停用，保留原有 LED 連線提示 |
+| 介面 | OLED 只有 IR／紅光 PPG 掃描波形頁（每筆 PPG 約 3～4 ms I2C，可能增加漏樣；P1.7 關螢幕即停止佔用），保留原有 LED 連線提示 |
 
 PPG 與 ACC 都沿用既有 big-endian 協定：`timestamp:u32 | type:u8 | sequence:u32 | payload`。
 兩種訊號各有自己的序號，不可拿 PPG 與 ACC 序號互相比較。
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 不同安裝位置可傳入 `-SdccHome`。
 
 輸出：`Release/ble_sensor_capture.hex`（Intel HEX）。腳本不燒錄、不改 MCU Config。
-2026-10-23 實際編譯連結（含 BMH08002-4 轉送）：**XRAM 680 B／768 B，Flash 10,860 B／18,432 B**。
+2026-10-25 實際編譯連結（含 BMH08002-4 轉送與 OLED 波形頁）：**XRAM 473 B／768 B，Flash 8,806 B／18,432 B**（移除未使用的文字頁）。
 這是靜態連結數值，不是最壞執行時堆疊驗證。
 
 使用原本 Nu-Link／NuEclipse 燒錄流程。UART1 的 P1.6／P0.2 與 ICP 共用：

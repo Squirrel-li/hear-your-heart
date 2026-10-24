@@ -10,6 +10,7 @@
 /*  OLED  SH1106 128x64 (1.3") on I2C0, 8-bit address 0x78 (7-bit 0x3C), polled master, ~296 kHz                 */
 /*    N76E003 P1.3 SCL, P1.4 SDA (open-drain, the OLED module provides the pull-ups)                       */
 /*    shows BLE name / link state / PPG values; one text row is refreshed per OLED_ROW_MS                  */
+/*    P3.0 cycles PPG / IMU / waveform pages; the capture build shows only the waveform               */
 /*                                                                                                         */
 /*  IMU  LSM6DS3 on the same I2C0 bus, 7-bit address 0x6B (SA0 = VCC)                                    */
 /*    read once per second, sent as one 21 B acc+gyro frame (msgType 0x02), shown on the IMU page */
@@ -111,6 +112,9 @@ unsigned char _sdcc_external_startup(void)
 #if defined(ITAP_CAPTURE) || defined(ITAP_MOTION_HR)
 #define ITAP_FAST_SENSOR 1
 #endif
+#ifndef ITAP_CAPTURE
+#define OLED_TEXT 1                         /* PPG / IMU text pages; capture shows only the waveform */
+#endif
 #define BM_BAUD             115200
 #ifdef ITAP_CAPTURE
 #define BM_NAME             "BLE_capture_ITAP"
@@ -142,11 +146,7 @@ unsigned char _sdcc_external_startup(void)
                                     /* continuous upload mode; in ask-response mode (0x02/03) it sends no 55 B0 */
                                     /* frames by itself.                                                        */
 
-#ifdef ITAP_FAST_SENSOR
-#define USE_OLED            0       /* dedicate I2C/main-loop time to acquisition */
-#else
 #define USE_OLED            1       /* 0 = skip the OLED (to rule it out when debugging)      */
-#endif
 #define OLED_ADDR           0x78    /* 8-bit I2C address                                     */
 #define OLED_I2CLK          13      /* I2C clock = Fsys / (4 * (13 + 1)) ~ 296 kHz           */
 #define OLED_TMO_MS         5       /* I2C SI wait limit (bus stuck / no pull-up)            */
@@ -855,7 +855,7 @@ static void ppg_send(void)
 
 /*============================== SH1106 OLED (I2C0, polled) ================*/
 /* 21 text columns x 8 rows (6x8 cell). Each row is built as text, compared with the */
-/* text already on screen and only sent when it changed (about 4 ms per row).        */
+/* hash of the row on screen and only sent when it changed (about 4 ms per row).    */
 #define OLED_COLS           21
 #define OLED_ROWS           8
 
@@ -864,17 +864,23 @@ UINT16 disp_t   = 0;
 __bit  disp_ok;                             /* a sample has been received            */
 __bit  ppg_ok;                              /* ... and it is recent                  */
 
+#ifdef OLED_TEXT
+#define OLED_PAGE_PPG       0
+#define OLED_PAGE_IMU       1
+#define OLED_PAGE_WAVE      2
 __xdata char ln[OLED_COLS + 1];             /* row being built                       */
-#ifndef ITAP_MOTION_HR
-__xdata char ln_cache[OLED_ROWS][OLED_COLS];/* text currently on the screen          */
-#endif
+__xdata UINT16 ln_sum[OLED_ROWS];          /* hash of the text on screen (a full copy does not fit motion's XRAM) */
+UINT8  ln_dirty;                            /* bit per row: redraw whatever the hash says */
 UINT8  ln_n;
 __xdata char ln_dig[5];
 UINT8  oled_row  = 0;
+UINT8  oled_page = OLED_PAGE_PPG;
+#endif
 UINT16 t_oled    = 0;
 __bit  oled_ok;
-__bit  oled_page;                           /* 0 = PPG page, 1 = IMU page                  */
 __bit  oled_off;                            /* 1 = panel switched off by the P1.7 key      */
+
+__bit  wave_new;                            /* disp holds a sample the waveform page has not drawn */
 
 /* Keys, active low to GND, falling edge: P3.0 = INT0 changes the page, P1.7 = INT1 switches */
 /* the OLED on / off. The ISRs only set a flag, key_task() debounces in the main loop.      */
@@ -964,10 +970,22 @@ static void i2c_stop(void)
         }
 }
 
-#ifndef ITAP_MOTION_HR
 static __bit oled_begin(UINT8 ctrl)                /* ctrl 0x00 = commands, 0x40 = data */
 {
     return i2c_start() && i2c_tx(OLED_ADDR, 0x18) && i2c_tx(ctrl, 0x28);
+}
+
+/* Point at page / RAM column (the SH1106 RAM is 132 wide, the panel shows columns 2..129) and  */
+/* open a data transfer: 1 = the caller sends the bytes, then i2c_stop(); 0 = bus already stopped. */
+static __bit oled_at(UINT8 page, UINT8 col)
+{
+    __bit ok = oled_begin(0x00) && i2c_tx(0xB0 + page, 0x28) &&
+               i2c_tx(col & 0x0F, 0x28) && i2c_tx(0x10 | (col >> 4), 0x28);
+    i2c_stop();
+    if (!ok) return 0;
+    if (oled_begin(0x40)) return 1;
+    i2c_stop();
+    return 0;
 }
 
 __code const UINT8 oled_init_seq[] = {     /* SH1106: page addressing only, no 0x20 / 0x21 / 0x22 / 0x8D */
@@ -986,18 +1004,37 @@ __code const UINT8 oled_init_seq[] = {     /* SH1106: page addressing only, no 0
     0xAF                /* display on                         */
 };
 
+#include "oled_wave.h"
+__xdata wave_state wave;
+
+static void oled_redraw(void)               /* page changed or panel re-initialised */
+{
+#ifdef OLED_TEXT
+    ln_dirty = 0xFF;
+#endif
+    wave_reset(&wave);
+}
+
+static void oled_hw_init(void)
+{
+    UINT8 i;
+    i2c_bus_init();
+
+    oled_ok = 0;
+    if (!oled_begin(0x00)) { i2c_stop(); return; }          /* no ACK: no OLED / bus problem */
+    for (i = 0; i < sizeof(oled_init_seq); i++)
+        if (!i2c_tx(oled_init_seq[i], 0x28)) { i2c_stop(); return; }
+    i2c_stop();
+    oled_redraw();                          /* text rows cover the whole panel, the waveform clears it first */
+    oled_ok = 1;
+}
+
+#ifdef OLED_TEXT
 static __bit oled_row_draw(UINT8 row)
 {
     UINT8 i, j, c;
     UINT16 g;
-    /* page = row, column pointer 2 (the SH1106 RAM is 132 wide, the panel shows columns 2..129) */
-    if (!(oled_begin(0x00) && i2c_tx(0xB0 + row, 0x28) && i2c_tx(0x02, 0x28) && i2c_tx(0x10, 0x28)))
-    {
-        i2c_stop();
-        return 0;
-    }
-    i2c_stop();
-    if (!oled_begin(0x40)) { i2c_stop(); return 0; }
+    if (!oled_at(row, 2)) return 0;
     for (i = 0; i < OLED_COLS; i++)
     {
         c = (UINT8)ln[i];
@@ -1010,26 +1047,6 @@ static __bit oled_row_draw(UINT8 row)
     if (!(i2c_tx(0x00, 0x28) && i2c_tx(0x00, 0x28))) { i2c_stop(); return 0; }   /* 21*6 + 2 = 128 */
     i2c_stop();
     return 1;
-}
-
-static void oled_hw_init(void)
-{
-    UINT8 i, j;
-    i2c_bus_init();
-
-    oled_ok = 0;
-    if (!oled_begin(0x00)) { i2c_stop(); return; }          /* no ACK: no OLED / bus problem */
-    for (i = 0; i < sizeof(oled_init_seq); i++)
-        if (!i2c_tx(oled_init_seq[i], 0x28)) { i2c_stop(); return; }
-    i2c_stop();
-
-    for (i = 0; i < OLED_COLS; i++) ln[i] = ' ';            /* clear the screen */
-    for (j = 0; j < OLED_ROWS; j++)
-    {
-        if (!oled_row_draw(j)) return;
-        for (i = 0; i < OLED_COLS; i++) ln_cache[j][i] = ' ';
-    }
-    oled_ok = 1;
 }
 
 static void ln_c(char c)
@@ -1231,7 +1248,7 @@ static void imu_send(void)
     imu_ready = 0;
 }
 
-#ifndef ITAP_MOTION_HR
+#ifdef OLED_TEXT
 static int imu_val(UINT8 i)                 /* i: 0..2 accel XYZ, 3..5 gyro XYZ */
 {
     __xdata UINT8 *p = imu_pkt + (i < 3 ? IMU_PKT_ACC : IMU_PKT_GYRO) + 2 * (i % 3);
@@ -1259,7 +1276,7 @@ static void oled_build(UINT8 row, UINT8 state)
 {
     UINT8 st = disp[PKT_ST];
     ln_n = 0;
-    if (oled_page && row >= 3)              /* IMU page: rows 0..2 (name, BLE, UP) stay */
+    if (oled_page == OLED_PAGE_IMU && row >= 3)   /* IMU page: rows 0..2 (name, BLE, UP) stay */
     {
         switch (row)
         {
@@ -1324,6 +1341,7 @@ static void oled_build(UINT8 row, UINT8 state)
     }
     while (ln_n < OLED_COLS) ln[ln_n++] = ' ';
 }
+#endif
 
 static void oled_power(__bit on)            /* SH1106 display off 0xAE / on 0xAF, RAM is kept */
 {
@@ -1342,7 +1360,10 @@ static void key_task(void)
         if ((UINT16)(t - t_key_page) >= KEY_DEBOUNCE_MS)
         {
             t_key_page = t;
-            oled_page = !oled_page;
+#ifdef OLED_TEXT                            /* capture: waveform only */
+            oled_page = oled_page == OLED_PAGE_WAVE ? OLED_PAGE_PPG : oled_page + 1;
+            oled_redraw();
+#endif
         }
     }
     if (key_oled)
@@ -1359,7 +1380,10 @@ static void key_task(void)
 
 static void oled_task(UINT8 state)
 {
-    UINT8 i;
+#ifdef OLED_TEXT
+    UINT8 i, bit;
+    UINT16 sum = 0;
+#endif
     UINT16 t = now_ms();
 
     if (oled_off) return;                   /* panel is off: no I2C traffic, no re-init */
@@ -1372,24 +1396,32 @@ static void oled_task(UINT8 state)
         }
         return;
     }
+#ifndef OLED_TEXT
+    wave_task(&wave);
+#else
+    if (oled_page == OLED_PAGE_WAVE) { wave_task(&wave); return; }
     if ((UINT16)(t - t_oled) < OLED_ROW_MS) return;
     t_oled = t;
 
     ppg_ok = disp_ok && (UINT16)(t - disp_t) < PPG_LOST_MS;
     oled_build(oled_row, state);
     for (i = 0; i < OLED_COLS; i++)
-        if (ln[i] != ln_cache[oled_row][i]) break;
-    if (i < OLED_COLS)                                      /* changed */
+        sum = ((sum << 1) | (sum >> 15)) ^ (UINT8)ln[i];   /* rotate-xor: position sensitive */
+    bit = 1 << oled_row;
+    if ((ln_dirty & bit) || sum != ln_sum[oled_row])         /* changed */
     {
         if (oled_row_draw(oled_row))
-            for (i = 0; i < OLED_COLS; i++) ln_cache[oled_row][i] = ln[i];
+        {
+            ln_sum[oled_row] = sum;
+            ln_dirty &= ~bit;
+        }
         else
             oled_ok = 0;                                    /* re-init after OLED_RETRY_MS */
     }
     oled_row = (oled_row + 1) & (OLED_ROWS - 1);
+#endif
 }
 
-#endif
 /*============================== main =======================================*/
 void main(void)
 {
@@ -1449,6 +1481,7 @@ void main(void)
             for (k = 0; k < PKT_LEN; k++) disp[k] = tx_pkt[k];   /* incl. sensor_time_ms [0..3] */
             disp_t  = t;
             disp_ok = 1;
+            wave_new = 1;
         }
 
 #ifdef ITAP_MOTION_HR

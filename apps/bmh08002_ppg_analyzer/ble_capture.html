@@ -9,7 +9,7 @@ body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-wid
 <h1>手錶 PPG / ACC 資料記錄</h1>
 <p>電腦藍牙直接連接 <code>BLE_capture_ITAP</code>。PPG 約 35.7 Hz、加速度 26 Hz；使用手錶時間戳，保留序號與漏包資訊。</p>
 <div class="layout"><div id="waveCol">
-<section><h2>即時波形（最近 10 秒）</h2>
+<section><h2>即時波形（最近 10 秒，由左至右掃描）</h2>
 <canvas id="wave" width="800" height="600" style="width:100%;border:1px solid #c8d8dd;border-radius:8px" role="img" aria-label="IR、紅光 PPG 與加速度合力即時波形"></canvas>
 <output id="latest" aria-live="off"></output>
 <p id="scales"></p>
@@ -128,13 +128,17 @@ function plot(){
     g.fillStyle='#45616b';
     g.fillText(`${label}（${fixed?'固定':'自動'}${pts.length?` ${Math.round(lo)}–${Math.round(hi)}`:''}）`,6,top+16);
     if(pts.length<2)return;
-    g.strokeStyle=color;g.lineWidth=1.5;g.beginPath();
-    pts.forEach(([t,v],i)=>{
-      const x=w-(now-t)/WINDOW_S*w,y=top+h-6-(Math.min(hi,Math.max(lo,v))-lo)/span*(h-28);
-      i?g.lineTo(x,y):g.moveTo(x,y);
-    });
+    // Sweep left to right like a patient monitor; the oldest 3% is left blank ahead of the cursor.
+    g.strokeStyle=color;g.lineWidth=1.5;g.beginPath();let lastX=Infinity;
+    for(const [t,v] of pts){
+      if(now-t>WINDOW_S*0.97){lastX=Infinity;continue;}
+      const x=t%WINDOW_S/WINDOW_S*w,y=top+h-6-(Math.min(hi,Math.max(lo,v))-lo)/span*(h-28);
+      x<lastX?g.moveTo(x,y):g.lineTo(x,y);lastX=x;
+    }
     g.stroke();
   });
+  const cursor=now%WINDOW_S/WINDOW_S*w;
+  g.strokeStyle='#9aa9ae';g.lineWidth=1;g.beginPath();g.moveTo(cursor,0);g.lineTo(cursor,c.height);g.stroke();
 }
 for(const [k,label] of TRACES){
   const row=document.createElement('label');row.className='inline';row.append(label+' 下限 ');
