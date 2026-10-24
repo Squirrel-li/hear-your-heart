@@ -2,6 +2,7 @@
 #include "music_library.h"
 #include "music_bpm_analyzer.h"
 #include "music_genre_classifier.h"
+#include "helix_state.h"
 
 #include <cstring>
 
@@ -9,11 +10,15 @@ namespace {
 
 constexpr const char* TAG = "AUDIO";
 constexpr const char* BPM_TAG = "BPMSCAN";
-// Playback first: each loop tops up the ring (about 3 s, MAX98357 RING_SLOTS) with up to this many frames,
-// and an analysis step runs only while at least ANALYSIS_MIN_BUFFER_MS is buffered, so a slow step
+// Playback first, decoding in batches: playback and analysis share one Helix state (helix_state.h), so the
+// ring (about 3 s at 44.1 kHz, 2.7 s at 48 kHz) is refilled to PLAYBACK_REFILL_MS, then analysis runs until
+// it falls to ANALYSIS_MIN_BUFFER_MS. The state is swapped about once a second, and a slow analysis step
 // (catalog save, tempo estimate, directory scan) is covered by the audio already queued.
-constexpr unsigned PLAYBACK_FRAMES_PER_LOOP = 8;
+constexpr unsigned PLAYBACK_FRAMES_PER_LOOP = 32;  // ~0.8 s of audio; commands are still read every loop
+constexpr uint32_t PLAYBACK_REFILL_MS = 2500;
 constexpr uint32_t ANALYSIS_MIN_BUFFER_MS = 1500;
+bool helixShared = false;       // helixStateInit() passed: analysis may decode while a song plays
+bool playbackRefilling = true;  // batch phase while playing: true = playback owns the decoder
 
 AmebaFatFS fs;
 MAX98357 amp;
@@ -557,6 +562,8 @@ void handleAudioCommand(AudioCmdElement& command)
         playbackPaused = false;
         currentPlaybackAutomatic = false;
         currentAutomaticSongIndex = -1;
+        helixUse(HelixUser::Playback);  // the first beginMp3() runs MP3InitDecoder on the current state
+        playbackRefilling = true;
         if (amp.beginMp3(fs, command.filename)) {
             currentPlaybackAutomatic = automatic;
             currentAutomaticSongIndex = automatic ? command.songIndex : -1;
@@ -693,6 +700,7 @@ void audioTask(void* parameter)
     (void)parameter;
 
     musicStorageReady = false;
+    helixShared = helixStateInit();
     LOGI(TAG, "started; mounting SD card (free heap %u)", static_cast<unsigned>(xPortGetFreeHeapSize()));
     const uint32_t sdStartMs = millis();
     if (!fs.begin()) {
@@ -743,13 +751,24 @@ void audioTask(void* parameter)
             handleAudioCommand(command);
         }
 
-        // Playback first: top up the ring, then spend the spare time on analysis.
-        for (unsigned i = 0; i < PLAYBACK_FRAMES_PER_LOOP && amp.isMp3Playing(); ++i) {
-            if (processPlayback() != Mp3ProcessResult::Playing) break;
+        const bool scanWork = bpmScan.requested || bpmScan.running;
+        if (amp.isMp3Playing()) {
+            if (!scanWork || !helixShared || amp.mp3BufferedMs() < ANALYSIS_MIN_BUFFER_MS) playbackRefilling = true;
+            if (playbackRefilling) {
+                helixUse(HelixUser::Playback);
+                for (unsigned i = 0; i < PLAYBACK_FRAMES_PER_LOOP && amp.isMp3Playing(); ++i) {
+                    if (processPlayback() != Mp3ProcessResult::Playing) break;
+                    if (amp.mp3BufferedMs() >= PLAYBACK_REFILL_MS) {
+                        playbackRefilling = false;
+                        break;
+                    }
+                }
+            }
         }
 
-        if ((bpmScan.requested || bpmScan.running) &&
-            (!amp.isMp3Playing() || amp.mp3BufferedMs() >= ANALYSIS_MIN_BUFFER_MS)) {
+        // Without a shared-state switch (helixShared false) analysis waits until playback stops or pauses.
+        if (scanWork && (!amp.isMp3Playing() || (helixShared && !playbackRefilling))) {
+            helixUse(HelixUser::Analysis);
             if (bpmScan.requested) beginBpmScan();
             if (bpmScan.running) advanceBpmScan();
         }
