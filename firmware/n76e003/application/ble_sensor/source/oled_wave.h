@@ -54,12 +54,17 @@ static UINT8 wave_y(__xdata wave_trace *w, UINT8 x, UINT16 v)   /* 1 (top) .. WA
     }
     w->last = v;
 #endif
+#ifdef ITAP_DEMO
+    if (!demo_on)                           /* DEMO recording: raw shape like the capture page, no baseline removal */
+#endif
+    {
     if (!w->base) w->base = (UINT32)v << WAVE_BASE_SHIFT;
     b = (UINT16)(w->base >> WAVE_BASE_SHIFT);
     w->base += v;
     w->base -= b;
     v = v >= b ? (v - b > 0x7FFF ? 0xFFFF : 0x8000 + (v - b))
                : (b - v > 0x8000 ? 0x0000 : 0x8000 - (b - v));
+    }
     if (x == 0)                             /* new sweep: keep the last one's range for scaling */
     {
         w->show_lo = w->lo;

@@ -66,7 +66,11 @@
 /*  Only common.c is needed from the BSP library (BIT_TMP used by the SFR page macros).                 */
 /*---------------------------------------------------------------------------------------------------------*/
 #include "numicro_8051.h"
+#ifdef ITAP_DEMO
+#include "../../ble_sensor_demo/source/oled_font_demo.h"
+#else
 #include "oled_font.h"
+#endif
 
 /*============================== startup: XRAM initialised variables =========*/
 /* SDCC's __mcs51_genXINIT copies the initial values (code, .XINIT) to the xdata variables (.XISEG)     */
@@ -576,6 +580,13 @@ UINT8 ppg_seq[4] = { 0, 0, 0, 0 };          /* Big-endian, counts every valid mo
 
 #ifdef ITAP_MOTION_HR
 #include "../../ble_sensor_hr/source/ppg_motion_hr.h"
+#ifdef ITAP_DEMO
+#include "../../ble_sensor_demo/source/demo_ppg.h"
+__bit demo_on;                              /* P3.0 held at power-up: recorded PPG replaces the module */
+#define MOTION_NEED_ACC     (!demo_on)
+#else
+#define MOTION_NEED_ACC     1
+#endif
 __xdata motion_hr motion;
 __xdata UINT8 motion_pkt[PKT_LEN];
 __bit motion_has, motion_ready;
@@ -588,7 +599,7 @@ static void motion_task(void)
     if (!ppg_ready) return;
     previous = motion.bpm;
     /* Low byte suffices within a <100ms gap; long gaps reset in mh_ppg. */
-    if (motion_seen && (UINT8)(tx_pkt[8] - motion_sequence) != 1) mh_reset(&motion, 1);
+    if (motion_seen && (UINT8)(tx_pkt[8] - motion_sequence) != 1) mh_reset(&motion, MOTION_NEED_ACC);
     motion_sequence = tx_pkt[8]; motion_seen = 1;
     if (mh_ppg(&motion, ((UINT16)tx_pkt[16] << 8) | tx_pkt[17],
                ((UINT16)tx_pkt[18] << 8) | tx_pkt[19],
@@ -977,9 +988,15 @@ static __bit oled_row_draw(UINT8 row)
     if (!oled_at(row, 2)) return 0;
     for (i = 0; i < OLED_COLS; i++)
     {
+#ifdef ITAP_DEMO
+        for (c = 0; font_chars[c] && font_chars[c] != ln[i]; c++);
+        if (!font_chars[c]) c = 0;          /* not in the subset: blank */
+        g = (UINT16)c * 5;
+#else
         c = (UINT8)ln[i];
         if (c < FONT_FIRST || c > FONT_LAST) c = ' ';
         g = (UINT16)(c - FONT_FIRST) * 5;
+#endif
         for (j = 0; j < 5; j++)
             if (!i2c_tx(font5x7[g + j], 0x28)) { i2c_stop(); return 0; }
         if (!i2c_tx(0x00, 0x28)) { i2c_stop(); return 0; }   /* 1 column gap */
@@ -1188,7 +1205,9 @@ static void imu_send(void)
     imu_ready = 0;
 }
 
-#ifdef OLED_TEXT
+#if defined(OLED_TEXT) && defined(ITAP_DEMO)
+#include "../../ble_sensor_demo/source/demo.h"
+#elif defined(OLED_TEXT)
 static int imu_val(UINT8 i)                 /* i: 0..2 accel XYZ, 3..5 gyro XYZ */
 {
     __xdata UINT8 *p = imu_pkt + (i < 3 ? IMU_PKT_ACC : IMU_PKT_GYRO) + 2 * (i % 3);
@@ -1301,7 +1320,11 @@ static void key_task(void)
         {
             t_key_page = t;
 #ifdef OLED_TEXT                            /* capture: waveform only */
+#ifdef ITAP_DEMO                            /* one merged text page */
+            oled_page = oled_page == OLED_PAGE_WAVE ? OLED_PAGE_PPG : OLED_PAGE_WAVE;
+#else
             oled_page = oled_page == OLED_PAGE_WAVE ? OLED_PAGE_PPG : oled_page + 1;
+#endif
             oled_redraw();
 #endif
         }
@@ -1387,13 +1410,17 @@ void main(void)
     Timer0_Tick_Init();
     UART0_Init();                               /* PPG, after UART1_Init (both touch BRCK) */
     set_ES_1;                                   /* UART1 interrupt */
+#ifdef ITAP_DEMO
+    demo_on = !P30;                             /* P3.0 is quasi with the latch high since reset */
+    if (!demo_on)
+#endif
     set_ES;                                     /* UART0 interrupt */
     key_init();                                 /* P3.0 page, P1.7 OLED on / off */
     set_EA;
 
     t_state = now_ms();
 #ifdef ITAP_MOTION_HR
-    mh_reset(&motion, 1);
+    mh_reset(&motion, MOTION_NEED_ACC);
 #endif
     t_oled  = t_state - (OLED_RETRY_MS - 100);  /* OLED init ~100 ms after power-up */
 #if USE_LED
@@ -1415,6 +1442,9 @@ void main(void)
         }
 
         /* keep the last complete sample for the OLED (ppg_ready means tx_pkt is stable) */
+#ifdef ITAP_DEMO
+        if (demo_on) demo_task(t);
+#endif
         if (ppg_ready)
         {
             UINT8 k;
@@ -1456,6 +1486,9 @@ void main(void)
                 g_rx_any    = 0;
                 g_frm_any   = 0;
 #if PPG_SEND_START
+#ifdef ITAP_DEMO
+                if (!demo_on)                   /* ppg_start() turns the UART0 interrupt back on */
+#endif
                 ppg_start();                    /* ~200 ms after power-up */
 #endif
                 bm_set_name();
