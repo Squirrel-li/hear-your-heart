@@ -36,6 +36,14 @@ static void oled_build(UINT8 row, UINT8 state)
     case 1:
         ln_time(uptime_ms());
         if (demo_on) ln_s(" DEMO");
+        /* battery: P1.1 = AIN7 behind a 1/2 divider, VDD 3.3 V reference; ADCRH 128..155 = 3.3..4.0 V */
+        /* shortcut: linear 0..100 from the last conversion, no filter (cap on the pin); calibrate if it matters */
+        k = ADCRH - 128;
+        if (k > 27) k = (k & 0x80) ? 0 : 27;    /* below 3.3 V wraps to >= 0x80 */
+        k = (k << 2) - (k >> 2);            /* x3.75 ~ 100 / 27 */
+        if (k > 100) k = 100;
+        ADCS = 1;                           /* next result is read on a later redraw of this row */
+        ln_s(" B"); ln_u(k, 3);
         break;
     case 2:
         ln_s("PPG(");
