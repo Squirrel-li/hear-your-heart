@@ -74,6 +74,11 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
    切換活動標記，先各錄靜止／走路／擺手至少30–60秒。
 5. 按「停止記錄」，分別下載 PPG CSV、ACC CSV、完整 JSON。
 
+波形下方「手錶演算法」一行，用收到的原始 PPG／ACC 即時執行 `ble_sensor_hr`（10 秒一筆，第一筆暖機）與
+`ble_sensor_motion`（5 秒一筆，含品質與無效原因）的心率演算法。程式在 `apps/bmh08002_ppg_analyzer/watch_hr.js`，
+是 `ble_sensor_hr/source/ppg_hr.h`、`ppg_motion_hr.h` 的逐行移植；`node apps/bmh08002_ppg_analyzer/test_watch_hr.js`
+（需 gcc）把真正的 C 標頭編譯後與 JS 逐筆比對，改演算法時兩邊要一起改。
+
 ### BMH08002-4 設定
 
 記錄頁的「BMH08002-4 設定」區經 FFF2 cmd opcode 0x02 轉送模組指令（格式見 `ble-notify-data-format.md` 第6節）：
