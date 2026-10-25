@@ -27,14 +27,15 @@ constexpr uint32_t REDRAW_MS = 50;
 constexpr uint32_t REFRESH_MS = 2000;
 
 // Layout (6x8 font, 21 columns, 8 rows aligned to the panel's 8-pixel pages so an
-// update only resends the pages that changed): now playing, 4 menu rows, 3 status
-// rows. The font leaves the bottom pixel row of each cell empty, which holds the lines.
-constexpr int16_t HEADER_Y = 0;
-constexpr int16_t HEADER_LINE_Y = 7;
-constexpr int16_t MENU_Y = 8;
-constexpr uint8_t MENU_ROWS = 4;
-constexpr int16_t DIVIDER_Y = 39;
-constexpr int16_t STATUS_Y[3] = {40, 48, 56};
+// update only resends the pages that changed): icon row, now playing, 4 menu rows, 2 info
+// rows (6 menu rows with the info bar off). The font leaves the bottom pixel row of each cell
+// empty, which holds the lines.
+constexpr int16_t ICON_Y = 0;
+constexpr int16_t SONG_Y = 8;
+constexpr int16_t HEADER_LINE_Y = 15;
+constexpr int16_t MENU_Y = 16;
+constexpr int16_t DIVIDER_Y = 47;
+constexpr int16_t STATUS_Y[2] = {48, 56};
 
 // Rows depend on the mode: TopStatus (Train progress / Enjoy target / Demo level) outside Manual,
 // TopSongs only in Manual, TopSongBpm while a library song plays. The Top cursor is a row; topItemAt() maps it to an item.
@@ -49,6 +50,7 @@ enum TopItem : uint8_t {
     TopBpmAnalysis,
     TopSource,
     TopBle,
+    TopInfoBar,
     TopPowerOff,
     TopCount
 };
@@ -119,6 +121,7 @@ uint16_t bpmAnalysisFailed = 0;
 char bpmAnalysisFile[AUDIO_FILENAME_MAX] = "";
 
 uint32_t lastRefreshMs = 0;
+bool infoBar = true;  // bottom HR / IMU rows; not saved, back on after reboot
 int16_t songMenuIndex = -1;     // musicLibrary index shown in SongMenu
 bool songMenuFromList = false;  // SongMenu opened from SongList (has Play, Back returns to the list)
 enum SongMenuItem : uint8_t { SongPlay, SongDouble, SongHalve, SongBack };
@@ -216,7 +219,7 @@ uint16_t itemCount()
     case Screen::PlanList: return TRAIN_PLAN_COUNT;
     case Screen::VolumeList: return VOLUME_COUNT;
     case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
-    case Screen::BpmStatus: return MENU_ROWS;
+    case Screen::BpmStatus: return 4;
     case Screen::SongList: return songCount();
     case Screen::SongMenu: return songMenuFromList ? 4 : 3;
     case Screen::SourceList: return SOURCE_LIST_COUNT;
@@ -270,6 +273,7 @@ const char* topItemName(uint8_t item)
     case TopBpmAnalysis: return "BPM analysis";
     case TopSource: return "Source";
     case TopBle: return "BLE";
+    case TopInfoBar: return "Info bar";
     case TopPowerOff: return "Power off";
     }
     return "?";
@@ -503,6 +507,9 @@ void activateItem()
             break;
         case TopBle:
             openList(Screen::BleList, 0);
+            break;
+        case TopInfoBar:
+            infoBar = !infoBar;
             break;
         case TopPowerOff:
             openList(Screen::PowerConfirm, 0);  // default to Cancel against a stray press
@@ -761,6 +768,9 @@ void itemLabel(uint16_t item, char* out, size_t size)
     case TopBle:
         snprintf(out, size, "BLE");
         break;
+    case TopInfoBar:
+        snprintf(out, size, "Info bar: %s", infoBar ? "On" : "Off");
+        break;
     case TopPowerOff:
         snprintf(out, size, "Power off");
         break;
@@ -798,50 +808,86 @@ int batteryPercent()
     return static_cast<int>((mv - BATTERY_EMPTY_MV) * 100 / (BATTERY_FULL_MV - BATTERY_EMPTY_MV));
 }
 
+// Letter box for a BLE link: inverted when up, blinking each second while connecting, plain when down.
+void drawLinkIcon(int16_t x, char letter, BleLinkState state)
+{
+    const bool on = state == BleLinkState::Up || (state == BleLinkState::Connecting && clockSeconds() % 2 == 0);
+    if (on) oled.fillRect(x, ICON_Y, 7, 7, 1);
+    else oled.drawRect(x, ICON_Y, 7, 7, 1);
+    oled.drawChar(x + 1, ICON_Y, letter, on ? 0 : 1, on ? 1 : 0, 1);
+}
+
+void drawHeader(char* line, size_t size)
+{
+    // Play state: triangle, two bars, or a square.
+    if (audioState == AudioState::Playing) {
+        oled.fillTriangle(0, ICON_Y, 0, ICON_Y + 6, 5, ICON_Y + 3, 1);
+    } else if (audioState == AudioState::Paused) {
+        oled.fillRect(0, ICON_Y, 2, 7, 1);
+        oled.fillRect(4, ICON_Y, 2, 7, 1);
+    } else {
+        oled.fillRect(0, ICON_Y + 1, 5, 5, 1);
+    }
+    drawLinkIcon(10, 'C', bleLink[0]);
+    drawLinkIcon(19, 'W', bleLink[1]);
+    // Hourglass while the BPM / genre scan is queued or running.
+    if (bpmAnalysisState == BpmAnalysisState::Queued || bpmAnalysisState == BpmAnalysisState::Running) {
+        oled.fillTriangle(30, ICON_Y, 36, ICON_Y, 33, ICON_Y + 3, 1);
+        oled.fillTriangle(30, ICON_Y + 6, 36, ICON_Y + 6, 33, ICON_Y + 3, 1);
+    }
+
+    const uint32_t sec = clockSeconds();
+    snprintf(line, size, "%02u:%02u", (unsigned)(sec / 60 % 100), (unsigned)(sec % 60));
+    oled.setCursor(44, ICON_Y);
+    oled.print(line);
+
+    // Battery at the far right; refreshed every REFRESH_MS to keep ADC reads cheap.
+    static int percent = -1;
+    static uint32_t lastBatteryMs = 0;
+    static bool batteryRead = false;
+    const uint32_t nowMs = millis();
+    if (!batteryRead || (uint32_t)(nowMs - lastBatteryMs) >= REFRESH_MS) {
+        percent = batteryPercent();
+        lastBatteryMs = nowMs;
+        batteryRead = true;
+    }
+    constexpr int16_t BAT_X = OledSh1106::WIDTH - 13;  // 11 px body + 1 px gap + 1 px nub
+    oled.drawRect(BAT_X, ICON_Y, 11, 7, 1);
+    oled.drawFastVLine(BAT_X + 11, ICON_Y + 2, 3, 1);
+    if (percent > 0) oled.fillRect(BAT_X + 2, ICON_Y + 2, (7 * percent + 99) / 100, 3, 1);
+    if (percent < 0) snprintf(line, size, "--%%");
+    else snprintf(line, size, "%d%%", percent);
+    oled.setCursor(BAT_X - 2 - 6 * static_cast<int16_t>(strlen(line)), ICON_Y);
+    oled.print(line);
+
+    // Second row: "001.mp3(136)", file name plus its library BPM, "--" when unknown.
+    oled.setCursor(0, SONG_Y);
+    if (audioState == AudioState::Stopped) {
+        oled.print("Stopped");
+    } else {
+        const int16_t i = playingLibraryIndex();
+        char bpmText[8] = "--";
+        if (i >= 0 && musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
+        snprintf(line, size, "%.15s(%s)", nowPlaying, bpmText);
+        oled.print(line);
+    }
+    oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
+}
+
 void draw()
 {
     char line[48];
     const uint16_t count = itemCount();
+    const uint8_t menuRows = infoBar ? 4 : 6;
 
     if (cursor < menuTop) menuTop = cursor;
-    if (cursor >= menuTop + MENU_ROWS) menuTop = cursor - MENU_ROWS + 1;
+    if (cursor >= menuTop + menuRows) menuTop = cursor - menuRows + 1;
 
     oled.clearDisplay();
     oled.setTextSize(1);
     const bool volumeBar = screen == Screen::VolumeList;
     oled.setTextColor(1);
-    oled.setCursor(0, HEADER_Y);
-    if (audioState == AudioState::Stopped) {
-        oled.print("Stopped");
-    } else {
-        // "001.mp3(136)": file name plus its library BPM, "--" when unknown.
-        char bpmText[8] = "--";
-        for (size_t i = 0; i < musicLibrary.count && i < MUSIC_LIBRARY_MAX; ++i) {
-            if (strcmp(musicLibrary.entries[i].file, nowPlaying) != 0) continue;
-            if (musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
-            break;
-        }
-        snprintf(line, sizeof(line), "%s %.9s(%s)",
-                 audioState == AudioState::Playing ? ">" : "||", nowPlaying, bpmText);
-        oled.print(line);
-    }
-    {
-        // Battery at the far right of the header; refreshed every REFRESH_MS to keep ADC reads cheap.
-        static int percent = -1;
-        static uint32_t lastBatteryMs = 0;
-        static bool batteryRead = false;
-        const uint32_t nowMs = millis();
-        if (!batteryRead || (uint32_t)(nowMs - lastBatteryMs) >= REFRESH_MS) {
-            percent = batteryPercent();
-            lastBatteryMs = nowMs;
-            batteryRead = true;
-        }
-        if (percent < 0) snprintf(line, sizeof(line), "--%%");
-        else snprintf(line, sizeof(line), "%d%%", percent);
-        oled.setCursor(OledSh1106::WIDTH - 6 * static_cast<int16_t>(strlen(line)), HEADER_Y);
-        oled.print(line);
-    }
-    oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
+    drawHeader(line, sizeof(line));
 
     if (volumeBar) {
         // Horizontal bar filling from the left; Up/Down adjust, OK leaves.
@@ -853,7 +899,7 @@ void draw()
         oled.fillRect(4, MENU_Y + 16, (BAR_W - 4) * volumePercent / 100, 8, 1);
     }
 
-    for (uint8_t row = 0; row < MENU_ROWS && !volumeBar; row++) {
+    for (uint8_t row = 0; row < menuRows && !volumeBar; row++) {
         const uint16_t item = menuTop + row;
         if (item >= count) break;
         const int16_t y = MENU_Y + row * 8;
@@ -867,34 +913,30 @@ void draw()
         if (row == 0 && menuTop > 0) {
             oled.setCursor(120, y);
             oled.print('^');
-        } else if (row == MENU_ROWS - 1 && item + 1 < count) {
+        } else if (row == menuRows - 1 && item + 1 < count) {
             oled.setCursor(120, y);
             oled.print('v');
         }
     }
 
     oled.setTextColor(1);
-    oled.drawFastHLine(0, DIVIDER_Y, OledSh1106::WIDTH, 1);
+    if (infoBar) {
+        oled.drawFastHLine(0, DIVIDER_Y, OledSh1106::WIDTH, 1);
 
-    oled.setCursor(0, STATUS_Y[0]);
-    const uint32_t sec = clockSeconds();
-    snprintf(line, sizeof(line), "C:%s W:%s %02u:%02u", linkLabel(bleLink[0]), linkLabel(bleLink[1]),
-             (unsigned)(sec / 60 % 100), (unsigned)(sec % 60));
-    oled.print(line);
+        if (havePpg) snprintf(line, sizeof(line), "HR:%u SpO2:%u St:%u", heartRate, spo2, ppgStatus);
+        else snprintf(line, sizeof(line), "HR:-- SpO2:-- St:-");
+        oled.setCursor(0, STATUS_Y[0]);
+        oled.print(line);
 
-    if (havePpg) snprintf(line, sizeof(line), "HR:%u SpO2:%u St:%u", heartRate, spo2, ppgStatus);
-    else snprintf(line, sizeof(line), "HR:-- SpO2:-- St:-");
-    oled.setCursor(0, STATUS_Y[1]);
-    oled.print(line);
-
-    // 128 px / 6 px = 21 columns: A:--,--,-- G:--,--,-- fits, real values may clip.
-    char accText[24] = "--,--,--";
-    char gyroText[24] = "--,--,--";
-    if (haveAcc) snprintf(accText, sizeof(accText), "%d,%d,%d", acc[0], acc[1], acc[2]);
-    if (haveGyro) snprintf(gyroText, sizeof(gyroText), "%d,%d,%d", gyro[0], gyro[1], gyro[2]);
-    snprintf(line, sizeof(line), "A:%s G:%s", accText, gyroText);
-    oled.setCursor(0, STATUS_Y[2]);
-    oled.print(line);
+        // 128 px / 6 px = 21 columns: A:--,--,-- G:--,--,-- fits, real values may clip.
+        char accText[24] = "--,--,--";
+        char gyroText[24] = "--,--,--";
+        if (haveAcc) snprintf(accText, sizeof(accText), "%d,%d,%d", acc[0], acc[1], acc[2]);
+        if (haveGyro) snprintf(gyroText, sizeof(gyroText), "%d,%d,%d", gyro[0], gyro[1], gyro[2]);
+        snprintf(line, sizeof(line), "A:%s G:%s", accText, gyroText);
+        oled.setCursor(0, STATUS_Y[1]);
+        oled.print(line);
+    }
 
     const bool full = (uint32_t)(millis() - lastRefreshMs) >= REFRESH_MS;
     const bool ok = full ? oled.refresh() : oled.display();
