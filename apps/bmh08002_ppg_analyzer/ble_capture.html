@@ -26,7 +26,7 @@ body{font:17px/1.6 system-ui,sans-serif;background:#edf3f4;color:#17323b;max-wid
 <p><small>連線後只顯示即時波形、不寫入資料；按「開始記錄」才建立一筆新記錄，可多次開始／停止而不必斷線。活動標記記錄的是操作當下的標記，並非精準動作起始時間。手錶模組心率不是獨立驗證真值。關閉 HUB 的自動連線，避免它占用手錶連線。</small></p>
 </section>
 <section><h2>BMH08002-4 設定</h2>
-<p><small>設定寫在模組自己的 EEPROM，斷電後仍保留。capture 韌體每次開機會把 mode 改回 4（連續上傳）、IR 光強改回 24000～30000、紅光改回 29000～30000，所以這幾欄的修改只維持到下次開機（要換預設值請改 ppg_setup.h）；mode 只建議用 4（連續上傳）或 12（連續上傳＋滿量程值手動更新），其他值會讓即時波形停止；interval 只用於定時上傳模式。光強欄位的最小值必須小於最大值。每個指令會讓 PPG 中斷最多約 0.5 秒，記錄中會出現序號缺口；記錄中下的指令也會寫進該筆記錄的 JSON。</small></p>
+<p><small>設定寫在模組自己的 EEPROM，斷電後仍保留。capture 韌體每次開機會把 mode 改回 4（連續上傳）、IR 光強改回 24000～28000、紅光改回 29000～30000，所以這幾欄的修改只維持到下次開機（要換預設值請改 ppg_setup.h）；mode 只建議用 4（連續上傳）或 12（連續上傳＋滿量程值手動更新），其他值會讓即時波形停止；interval 只用於定時上傳模式。光強欄位的最小值必須小於最大值。每個指令會讓 PPG 中斷最多約 0.5 秒，記錄中會出現序號缺口；記錄中下的指令也會寫進該筆記錄的 JSON。</small></p>
 <div id="fields"></div>
 <button id="readAll" disabled>讀取全部</button><button id="writeAll" disabled>寫入已修改欄位</button>
 <p><button id="mStart" disabled>開始量測</button><button id="mStop" disabled>停止量測</button><button id="mCal" disabled>校正靈敏度</button></p>

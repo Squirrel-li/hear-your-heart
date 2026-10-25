@@ -3,14 +3,14 @@
 /* is read first and written only when it differs, then "start measure" is sent. A write takes 50 ms  */
 /* and no command may follow during that time; other commands need 6 ms.                            */
 /* LED intensity limits (datasheet 0..30000, min < max, no documented factory default) were tuned on   */
-/* the capture page (2026-10-25): IR 24000..30000, red 29000..30000 gave status 2 and a clean pulse;  */
+/* the capture page (2026-10-25): IR 24000..28000, red 29000..30000 gave status 2 and a clean pulse;  */
 /* 18000..30000 for both left the module at status 1 (finger, no data). Max is written before min so  */
 /* a module holding min > max never sees a worse pair.                                               */
 /* ../test_ppg_setup.c checks it on a PC.                                                             */
 /* Include after: UINT8/16, __code, __bit, PPG_MODE_VALUE, now_ms(), SBUF, TI, RI, clr_ES, set_ES.     */
 #define PPG_REPLY_MS        100
 #define PPG_IR_MIN          24000           /* EEPROM 0x02 */
-#define PPG_IR_MAX          30000           /* EEPROM 0x04 */
+#define PPG_IR_MAX          28000           /* EEPROM 0x04 */
 #define PPG_RED_MIN         29000           /* EEPROM 0x06 */
 #define PPG_RED_MAX         30000           /* EEPROM 0x08 */
 #define PPG_REGS            5

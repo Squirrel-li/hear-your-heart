@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File firmware/n76e003/application/ble_sensor
 不要讓 Debug launch 的 Config「Write」意外重寫 Config0。
 感測器／OLED 的接線沿用 `ble_sensor`；本版本不要求額外硬體。
 
-每次開機會讀取 BMH08002-4 EEPROM 0x01（mode）與 0x02～0x08（光強上下限），與目標（mode 0x04、IR 24000～30000、紅光 29000～30000）不同的才寫入，再啟動量測（`ble_sensor/source/ppg_setup.h`，四個手錶版本共用）。光強是 2026-10-25 在 capture 網頁實測後選定；兩者都設 18000～30000 時模組停在 status 1（有手指無數據）。
+每次開機會讀取 BMH08002-4 EEPROM 0x01（mode）與 0x02～0x08（光強上下限），與目標（mode 0x04、IR 24000～28000、紅光 29000～30000）不同的才寫入，再啟動量測（`ble_sensor/source/ppg_setup.h`，四個手錶版本共用）。光強是 2026-10-25 在 capture 網頁實測後選定；兩者都設 18000～30000 時模組停在 status 1（有手指無數據）。
 這個模式會保留在模組中。之後燒回一般 `ble_sensor` 會由其開機流程恢復 0x00；
 `ble_sensor_hr` 本來就使用連續模式。
 
