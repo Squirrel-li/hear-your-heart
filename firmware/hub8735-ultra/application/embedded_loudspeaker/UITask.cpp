@@ -73,7 +73,7 @@ enum class Screen : uint8_t {
     PowerConfirm,  // Cancel / Power off
     AgeEdit,       // Up/Down change the age, OK saves it (controlTask writes flash)
     DebugList,     // Info bar (OK toggles) / Analysis / Back
-    AnalysisList,  // Reanalyze all / Clear all / Back; each opens AnalysisConfirm
+    AnalysisList,  // Reanalyze all / Clear all (both open AnalysisConfirm) / Clear one song (SongList) / Back
     AnalysisConfirm  // Cancel / Confirm for the action picked in AnalysisList
 };
 
@@ -135,7 +135,8 @@ uint32_t okPressMs = 0;  // OKT latency log: time of the last OK press, 0 = none
 // BpmStatus rows: state, progress, file, Back. View only: a scan is cancelled by serial "bpm cancel" or standby.
 constexpr uint16_t BPM_STATUS_BACK = 3;
 enum DebugItem : uint8_t { DebugInfoBar, DebugAnalysis, DebugBack };
-enum AnalysisItem : uint8_t { AnalysisReanalyzeAll, AnalysisClearAll, AnalysisBack };
+enum AnalysisItem : uint8_t { AnalysisReanalyzeAll, AnalysisClearAll, AnalysisClearOne, AnalysisBack };
+bool songListClear = false;  // SongList opened from AnalysisClearOne: OK on a song clears its BPM and genre
 uint8_t analysisConfirmItem = AnalysisReanalyzeAll;  // action AnalysisConfirm asks about
 
 // Reported by BLETask, index = SensorSource (Chest, Watch).
@@ -415,7 +416,10 @@ void goBack()
     case Screen::GenreList: backToTop(TopGenre); break;
     case Screen::AgeEdit: backToTop(TopAge); break;  // the edit is dropped
     case Screen::BpmStatus: backToTop(TopBpmAnalysis); break;
-    case Screen::SongList: backToTop(TopSongs); break;
+    case Screen::SongList:
+        if (songListClear) openList(Screen::AnalysisList, AnalysisClearOne);
+        else backToTop(TopSongs);
+        break;
     case Screen::SongMenu:
         if (songMenuFromList && songMenuIndex >= 0) openList(Screen::SongList, static_cast<uint16_t>(songMenuIndex + 1));
         else backToTop(songMenuFromList ? TopSongs : TopSongBpm);
@@ -468,10 +472,15 @@ void activateItem()
         backToTop(TopBpmAnalysis);  // the scan keeps running in the background
         break;
     case Screen::SongList:
-        if (cursor >= 1 && cursor <= musicLibrary.count) {
+        if (cursor >= 1 && cursor <= musicLibrary.count && songListClear) {
+            // Stays open: the row shows "--" once audioTask has saved it.
+            sendCommand(UiCommandType::SetSongBpm, 0, PlayMode::Enjoy, static_cast<int16_t>(cursor - 1));
+        } else if (cursor >= 1 && cursor <= musicLibrary.count) {
             songMenuIndex = static_cast<int16_t>(cursor - 1);
             songMenuFromList = true;
             openList(Screen::SongMenu, songMenuBackRow());
+        } else if (songListClear) {
+            openList(Screen::AnalysisList, AnalysisClearOne);
         } else {
             backToTop(TopSongs);
         }
@@ -525,6 +534,11 @@ void activateItem()
     case Screen::AnalysisList:
         if (cursor == AnalysisBack) {
             openList(Screen::DebugList, DebugAnalysis);
+        } else if (cursor == AnalysisClearOne) {
+            if (musicLibraryReady && !musicBpmAnalysisBusy && musicLibrary.count > 0) {
+                songListClear = true;
+                openList(Screen::SongList, 1);
+            }
         } else {
             analysisConfirmItem = static_cast<uint8_t>(cursor);
             openList(Screen::AnalysisConfirm, 0);  // default to Cancel: both drop the user's BPM corrections
@@ -560,6 +574,7 @@ void activateItem()
             break;
         case TopSongs:
             if (musicLibraryReady && !musicBpmAnalysisBusy && musicLibrary.count > 0) {
+                songListClear = false;
                 openList(Screen::SongList, 1);  // first song
             } else {
                 LOGD(TAG, "song list unavailable (ready=%d busy=%d count=%u)", musicLibraryReady ? 1 : 0,
@@ -777,7 +792,8 @@ void itemLabel(uint16_t item, char* out, size_t size)
         return;
     case Screen::AnalysisList:
         snprintf(out, size, "%s", item == AnalysisReanalyzeAll ? "Reanalyze all"
-                                  : item == AnalysisClearAll ? "Clear all results" : "Back");
+                                  : item == AnalysisClearAll ? "Clear all results"
+                                  : item == AnalysisClearOne ? "Clear one song" : "Back");
         return;
     case Screen::AnalysisConfirm:
         if (item == 0) snprintf(out, size, "Cancel");

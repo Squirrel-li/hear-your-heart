@@ -639,22 +639,27 @@ void handleAudioCommand(AudioCmdElement& command)
 
     case AudioCommandType::SetSongBpm: {
         // User correction (x2 / /2). A later "reanalyze all" overwrites it (user decision 2026-10-22).
+        // bpm 0 clears this song's BPM and genre (OLED Debug "Clear one song"), so the next rescan analyzes it.
         // Allowed during a scan: this task also runs the scan, so the save cannot interleave with it.
         const int index = findLibraryEntry(command.filename);
-        if (index < 0 || command.bpm < 30 || command.bpm > 300) {
+        if (index < 0 || (command.bpm != 0 && (command.bpm < 30 || command.bpm > 300))) {
             LOGW(BPM_TAG, "BPM correction rejected: '%s' -> %u (index %d)", command.filename,
                  static_cast<unsigned>(command.bpm), index);
             break;
         }
         MusicEntry& entry = musicLibrary.entries[index];
         const uint16_t previous = entry.bpm;
+        char previousGenre[sizeof(entry.genre)];
+        memcpy(previousGenre, entry.genre, sizeof(previousGenre));
         entry.bpm = command.bpm;
+        if (command.bpm == 0) entry.genre[0] = '\0';
         ++musicLibraryRevision;
         if (musicLibrarySave(fs, musicLibrary)) {
-            LOGI(BPM_TAG, "BPM corrected by user: %s %u -> %u", entry.file, static_cast<unsigned>(previous),
-                 static_cast<unsigned>(entry.bpm));
+            LOGI(BPM_TAG, "BPM %s by user: %s %u -> %u", command.bpm == 0 ? "and genre cleared" : "corrected",
+                 entry.file, static_cast<unsigned>(previous), static_cast<unsigned>(entry.bpm));
         } else {
             entry.bpm = previous;
+            memcpy(entry.genre, previousGenre, sizeof(previousGenre));
             LOGE(BPM_TAG, "BPM correction not saved; %s keeps %u", entry.file, static_cast<unsigned>(previous));
         }
         break;
