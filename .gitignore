@@ -122,3 +122,17 @@ Objects/
 # Local agent instructions and memory
 /AGENTS.md
 /.agents/
+
+# Third-party material kept locally only (licence / redistribution limits)
+/docs/references/
+*.mp3
+/firmware/hub8735-ultra/sd_card/*
+/firmware/hub8735-ultra/sd_card_demo/*
+!/firmware/hub8735-ultra/sd_card/NN_MDL/
+!/firmware/hub8735-ultra/sd_card_demo/NN_MDL/
+/firmware/n76e003/Common/
+/firmware/n76e003/Include/
+/firmware/n76e003/Startup/
+/firmware/n76e003/application/I2C_Master-Slave/
+/firmware/n76e003/application/UART0/
+/firmware/n76e003/application/UART1/

@@ -16,7 +16,7 @@ hear-your-heart/
 ├── external/                # AmebaPro2 SDK與Arduino函式庫
 └── firmware/
     ├── hub8735-ultra/       # HUB主程式、範例、主機檢查、SD卡內容
-    └── n76e003/             # 手錶韌體、BSP、BM7701測試腳本
+    └── n76e003/             # 手錶韌體、BSP（子模組）、BM7701測試腳本
 ```
 
 ## 開發工具
@@ -24,7 +24,7 @@ hear-your-heart/
 | 用途 | 工具與版本 |
 | --- | --- |
 | HUB韌體 | Arduino IDE 2.3.10、AmebaPro2板子套件4.1.1、MAX98357函式庫1.1.0（`external/libraries`） |
-| 手錶韌體 | NuEclipse 8051 V1.02.028r、SDCC 4.2.6、Nu-Link燒錄 |
+| 手錶韌體 | NuEclipse 8051 V1.02.028r、SDCC 4.2.6、Nu-Link燒錄；BSP為子模組[N76E003_BSP](https://github.com/OpenNuvoton/N76E003_BSP)（`firmware/n76e003/N76E003_BSP`），clone後執行`git submodule update --init` |
 | BLE感測模擬器 | Flutter 3.44.7（Dart 3.12.2） |
 | 分析與測試腳本 | Python 3.12、g++（MinGW GCC 6.3.0） |
 
@@ -36,6 +36,6 @@ hear-your-heart/
 - [序列埠指令](docs/hub8735/SERIAL_COMMANDS.md)：HUB除錯與控制指令
 - [BLE封包格式](firmware/n76e003/ble-notify-data-format.md)：手錶／綁帶傳給HUB的資料格式
 - [HUB接腳](firmware/hub8735-ultra/pinset.md)：HUB8735 Ultra的接線
-- [SD卡內容](firmware/hub8735-ultra/sd_card/README.md)：歌曲、曲風模型與DEMO音樂
+- SD卡內容：repo只附曲風模型`firmware/hub8735-ultra/sd_card/NN_MDL/yamnet.nb`；歌曲與DEMO音樂因授權不隨repo散布，請自行放入SD卡（DEMO曲目路徑見[DEMO模式](docs/hub8735/DEMO_MODE.md)）
 
 > 僅供專題研究與展示，不提供醫療診斷。

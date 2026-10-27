@@ -19,3 +19,6 @@
 [submodule "external/libraries/MAX98357"]
 	path = external/libraries/MAX98357
 	url = https://github.com/Squirrel-li/MAX98357.git
+[submodule "firmware/n76e003/N76E003_BSP"]
+	path = firmware/n76e003/N76E003_BSP
+	url = https://github.com/OpenNuvoton/N76E003_BSP.git
