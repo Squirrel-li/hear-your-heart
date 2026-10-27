@@ -38,8 +38,14 @@ static void wave_reset(__xdata wave_state *ws)  /* clear the panel, then start a
     ws->x   = 0;
 }
 
+#ifdef ITAP_DEMO
+static UINT8 wave_y(__xdata wave_trace *w, UINT8 x, UINT16 v, UINT8 top)   /* screen row 0..63, top = its half */
+{
+    UINT32 d;
+#else
 static UINT8 wave_y(__xdata wave_trace *w, UINT8 x, UINT16 v)   /* 1 (top) .. WAVE_H - 2 of its half */
 {
+#endif
     UINT16 lo, hi, b;
 #ifndef WAVE_NO_JOIN
     UINT16 a;
@@ -74,6 +80,15 @@ static UINT8 wave_y(__xdata wave_trace *w, UINT8 x, UINT16 v)   /* 1 (top) .. WA
     if (v < w->lo) w->lo = v;
     if (v > w->hi) w->hi = v;
     lo = w->lo; hi = w->hi;                 /* v is inside the current sweep's range */
+#ifdef ITAP_DEMO
+    /* DEMO: the scale changes only at column 0 (the last sweep's min..max); inside a sweep a value */
+    /* outside it is still drawn and clipped only at the screen edge, so it may cross the other trace */
+    if (w->show_hi > w->show_lo) { lo = w->show_lo; hi = w->show_hi; }   /* else first sweep: its own range */
+    if (hi <= lo) return top + WAVE_H / 2;
+    d = (UINT32)(v > hi ? v - hi : hi - v) * (WAVE_H - 3) / (hi - lo) + 1;   /* unsigned: no signed 32-bit division */
+    if (v > hi) return d > top ? 0 : top - (UINT8)d;                          /* above the range */
+    return d + top > 2 * WAVE_H - 1 ? 2 * WAVE_H - 1 : top + (UINT8)d;
+#else
     if (w->show_hi > w->show_lo)
     {
         if (w->show_lo < lo) lo = w->show_lo;
@@ -81,6 +96,7 @@ static UINT8 wave_y(__xdata wave_trace *w, UINT8 x, UINT16 v)   /* 1 (top) .. WA
     }
     if (hi <= lo) return WAVE_H / 2;
     return 1 + (UINT8)((UINT32)(hi - v) * (WAVE_H - 3) / (hi - lo));
+#endif
 }
 
 /* A bus shared with a fast-polled IMU sees occasional errors: reset the I2C block and carry on, */
@@ -94,6 +110,9 @@ static void wave_fail(__xdata wave_state *ws)
 static void wave_task(__xdata wave_state *ws)
 {
     UINT8 i, p, y[2], a, b, r, bits;
+#ifdef ITAP_DEMO
+    UINT8 k, lo[2], hi[2];
+#endif
 
     if (ws->clr < 8)                        /* blank one page per call before the first column */
     {
@@ -113,10 +132,29 @@ static void wave_task(__xdata wave_state *ws)
     if (!wave_new) return;
     wave_new = 0;
 
+#ifdef ITAP_DEMO
+    for (k = 0; k < 2; k++)                 /* P1 IR, P2 red; y is a screen row 0..63 */
+    {
+        a = y[k] = wave_y(&ws->tr[k], ws->x, ((UINT16)disp[PKT_ST + 7 + 2 * k] << 8) | disp[PKT_ST + 8 + 2 * k], k * WAVE_H);
+                                            /* segment from the previous column, not across the wrap */
+        b = ws->x ? ws->tr[k].y : a;
+        lo[k] = a < b ? a : b;
+        hi[k] = a < b ? b : a;
+    }
+#else
     y[0] = wave_y(&ws->tr[0], ws->x, ((UINT16)disp[PKT_ST + 7] << 8) | disp[PKT_ST + 8]);   /* P1 IR  */
     y[1] = wave_y(&ws->tr[1], ws->x, ((UINT16)disp[PKT_ST + 9] << 8) | disp[PKT_ST + 10]);  /* P2 red */
+#endif
     for (p = 0; p < 8; p++)
     {
+#ifdef ITAP_DEMO
+        bits = 0;
+        for (i = 0; i < 8; i++)             /* either trace may reach any page */
+        {
+            r = p * 8 + i;
+            if ((r >= lo[0] && r <= hi[0]) || (r >= lo[1] && r <= hi[1])) bits |= 1 << i;
+        }
+#else
         a = y[p >> 2];
         b = ws->x ? ws->tr[p >> 2].y : a;   /* join to the previous column, not across the wrap */
         if (a > b) { r = a; a = b; b = r; }
@@ -126,6 +164,7 @@ static void wave_task(__xdata wave_state *ws)
             r = (p & 3) * 8 + i;            /* row inside the half */
             if (r >= a && r <= b) bits |= 1 << i;
         }
+#endif
         i = oled_at(p, ws->x + 2);
         if (i)
         {

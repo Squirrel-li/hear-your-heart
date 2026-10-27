@@ -6,7 +6,6 @@
 /*   PPG(2) HR  72          module status (- none yet, L lost, 0 no finger, 1 finger, 2 data), local HR  */
 /*   12345 23456            PPG1 (IR) PPG2 (red)                                                          */
 /*   A  -123   456  4096    acc x y z                                                                     */
-/*   G     0     0     0    gyro x y z (off in the motion builds)                                         */
 static void ln_i(int v)                     /* signed, width 6, dashes when there is no sample */
 {
     UINT8  i = 0, w = 6;
@@ -21,6 +20,7 @@ static void ln_i(int v)                     /* signed, width 6, dashes when ther
 }
 
 __code const char ble_ch[] = "IIIIAAAACSD"; /* indexed by ST_RESET .. ST_DISC_WAIT */
+UINT16 bat_avg;                             /* ADCRH x 256, seeded at boot; the high byte is the average */
 
 static void oled_build(UINT8 row, UINT8 state)
 {
@@ -38,10 +38,12 @@ static void oled_build(UINT8 row, UINT8 state)
         if (demo_on) ln_s(" DEMO");
         /* battery: P1.1 = AIN7 behind a 1/2 divider, VDD 3.3 V reference; ADCRH 128..155 = 3.3..4.0 V */
         /* shortcut: linear 0..100 from the last conversion, no filter (cap on the pin); calibrate if it matters */
-        k = ADCRH - 128;
-        if (k > 27) k = (k & 0x80) ? 0 : 27;    /* below 3.3 V wraps to >= 0x80 */
-        k = (k << 2) - (k >> 2);            /* x3.75 ~ 100 / 27 */
-        if (k > 100) k = 100;
+        /* exponential average of 256 conversions, one per redraw (8 x OLED_ROW_MS = 160 ms): ~40 s */
+        bat_avg += ADCRH - (UINT8)(bat_avg >> 8);
+        k = (UINT8)(bat_avg >> 8) - 128;
+        if (k & 0x80) k = 0;                /* below 3.3 V wraps to >= 0x80 */
+        else if (k > 26) k = 100;
+        else k = (k << 2) - (k >> 2);       /* x3.75 ~ 100 / 27, 26 -> 98 */
         ADCS = 1;                           /* next result is read on a later redraw of this row */
         ln_s(" B"); ln_u(k, 3);
         break;
@@ -56,10 +58,9 @@ static void oled_build(UINT8 row, UINT8 state)
         ln_u(((UINT16)disp[PKT_ST + 7] << 8) | disp[PKT_ST + 8], 5); ln_c(' ');
         ln_u(((UINT16)disp[PKT_ST + 9] << 8) | disp[PKT_ST + 10], 5);
         break;
-    case 4:
-    case 5:
-        ln_c(row == 4 ? 'A' : 'G');
-        p = imu_pkt + (row == 4 ? IMU_PKT_ACC : IMU_PKT_GYRO);
+    case 4:                                 /* no gyro row: off in the motion builds, and Flash is full */
+        ln_c('A');
+        p = imu_pkt + IMU_PKT_ACC;
         for (k = 0; k < 3; k++, p += 2) ln_i(((int)p[0] << 8) | p[1]);
         break;
     default: break;

@@ -1412,6 +1412,15 @@ void main(void)
     set_ES_1;                                   /* UART1 interrupt */
 #ifdef ITAP_DEMO
     demo_on = !P30;                             /* P3.0 is quasi with the latch high since reset */
+    /* battery divider on P1.1 = AIN7, read by the text page; ENABLE_ADC_AIN7 without its two SFR page */
+    /* switches (all page 0 here, ~30 B of Flash) */
+    P1M1 |= 0x02;                               /* input only (P1M2 bit is 0 since reset) */
+    AINDIDS = 0x80;
+    ADCCON0 = 0x07;
+    ADCCON1 = 0x01;
+    ADCS = 1;
+    while (!ADCF);                              /* one conversion seeds the average */
+    bat_avg = (UINT16)ADCRH << 8;
     if (!demo_on)
 #endif
     set_ES;                                     /* UART0 interrupt */
