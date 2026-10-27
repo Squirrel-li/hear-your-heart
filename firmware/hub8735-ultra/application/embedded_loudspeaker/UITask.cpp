@@ -37,11 +37,11 @@ constexpr int16_t MENU_Y = 16;
 constexpr int16_t DIVIDER_Y = 47;
 constexpr int16_t STATUS_Y[2] = {48, 56};
 
-// Rows depend on the mode: TopStatus (Train progress / Enjoy target / Demo level) outside Manual,
-// TopSongs only in Manual, TopSongBpm while a library song plays. The Top cursor is a row; topItemAt() maps it to an item.
+// Rows depend on the mode: TopGenre in Enjoy / Train, TopSongs only in Manual, TopSongBpm while a library song
+// plays. The Top cursor is a row; topItemAt() maps it to an item.
 enum TopItem : uint8_t {
     TopMode,
-    TopStatus,
+    TopGenre,
     TopPlay,
     TopSongBpm,
     TopSongs,
@@ -49,9 +49,9 @@ enum TopItem : uint8_t {
     TopVolume,
     TopAge,
     TopBpmAnalysis,
-    TopSource,
     TopBle,
-    TopInfoBar,
+    TopInput,
+    TopDebug,
     TopPowerOff,
     TopCount
 };
@@ -62,22 +62,21 @@ enum class Screen : uint8_t {
     ModeList,
     PlanList,      // Train plans, opened when Train is picked in ModeList
     VolumeList,
-    BpmAnalysisList,
+    GenreList,     // preferred genre for Enjoy / Train; OK picks it and leaves
     BpmStatus,
     SongList,
     SongMenu,      // one song: [Play] / BPM x2 / BPM /2 / Back (Play only when opened from SongList)
-    SourceList,    // PPG / IMU (OK cycles Chest/Watch/Local) / Back
-    BleList,       // per device: link (OK connects / disconnects), mode (OK toggles Auto/Manual); Back
+    BleList,       // Watch / Chest link (OK toggles Auto/Off); Back
+    CustomList,    // opened when Top Input reaches Custom: PPG / IMU (OK cycles each); Back
     PowerConfirm,  // Cancel / Power off
-    ClearConfirm,  // Cancel / Clear all (BPM and genre results)
-    AgeEdit        // Up/Down change the age, OK saves it (controlTask writes flash)
+    AgeEdit,       // Up/Down change the age, OK saves it (controlTask writes flash)
+    DebugList,     // Info bar (OK toggles) / Analysis / Back
+    AnalysisList,  // Reanalyze all / Clear all / Back; each opens AnalysisConfirm
+    AnalysisConfirm  // Cancel / Confirm for the action picked in AnalysisList
 };
 
 constexpr uint8_t MODE_COUNT = 4;  // PlayMode values in order: Enjoy, Train, Manual, Demo
-constexpr uint8_t SOURCE_LIST_COUNT = 3;
-constexpr uint8_t BLE_LIST_COUNT = 5;  // Chest link, Chest mode, Watch link, Watch mode, Back
 constexpr uint8_t SOURCE_COUNT = 3;  // Chest, Watch, Local
-constexpr uint8_t BPM_ANALYSIS_COUNT = 4;  // New / unknown, Reanalyze all, Clear all results, Cancel
 constexpr uint8_t POWER_CONFIRM_COUNT = 2;
 constexpr uint8_t VOLUME_STEP = 10;
 constexpr uint8_t VOLUME_COUNT = 100 / VOLUME_STEP + 1;
@@ -99,6 +98,7 @@ uint16_t menuTop = 0;
 // Mirrors the choice sent to analysisTask (PPG starts on Watch, IMU on Local).
 SensorSource ppgSource = SensorSource::Watch;
 SensorSource imuSource = SensorSource::Local;
+bool customInput = true;  // PPG and IMU picked separately; the boot pair (Watch, Local) differs
 
 // Reported by controlTask / audioTask.
 PlayMode playMode = PlayMode::Enjoy;
@@ -107,7 +107,6 @@ uint8_t trainStage = TRAIN_STAGE_DONE;
 uint16_t trainRemainingS = 0;
 bool trainDone = false;  // shown until the mode changes again
 uint16_t targetBpm = 0;  // Enjoy: 0 until a valid heart rate gives a target
-uint8_t targetZone = 0;
 uint8_t motionLevel = MOTION_LEVEL_NONE;  // Demo
 AudioState audioState = AudioState::Stopped;
 char nowPlaying[AUDIO_FILENAME_MAX] = "";
@@ -129,9 +128,13 @@ bool songMenuFromList = false;  // SongMenu opened from SongList (has Play, Back
 enum SongMenuItem : uint8_t { SongPlay, SongDouble, SongHalve, SongBack };
 bool powerOffRequested = false;  // set by the confirm screen, handled in the UITask loop
 uint8_t ageEdit = USER_AGE_DEFAULT;  // value shown while AgeEdit is open
-// BpmStatus rows: state, progress, file, Back, and Cancel while a scan is queued or running.
+uint8_t preferredGenre = 0;  // mirrors the SetGenre sent to controlTask (GENRE_CHOICES index)
+uint32_t okPressMs = 0;  // OKT latency log: time of the last OK press, 0 = none
+// BpmStatus rows: state, progress, file, Back. View only: a scan is cancelled by serial "bpm cancel" or standby.
 constexpr uint16_t BPM_STATUS_BACK = 3;
-constexpr uint16_t BPM_STATUS_CANCEL = 4;
+enum DebugItem : uint8_t { DebugInfoBar, DebugAnalysis, DebugBack };
+enum AnalysisItem : uint8_t { AnalysisReanalyzeAll, AnalysisClearAll, AnalysisBack };
+uint8_t analysisConfirmItem = AnalysisReanalyzeAll;  // action AnalysisConfirm asks about
 
 // Reported by BLETask, index = SensorSource (Chest, Watch).
 BleLinkState bleLink[2] = {BleLinkState::Down, BleLinkState::Down};
@@ -182,7 +185,7 @@ uint8_t songMenuItemAt(uint16_t row) { return static_cast<uint8_t>(songMenuFromL
 bool topItemVisible(uint8_t item)
 {
     if (item == TopSongBpm) return playingLibraryIndex() >= 0;
-    if (item == TopStatus) return playMode != PlayMode::Manual;
+    if (item == TopGenre) return playMode == PlayMode::Enjoy || playMode == PlayMode::Train;
     if (item == TopSongs) return playMode == PlayMode::Manual;
     return true;
 }
@@ -229,15 +232,17 @@ uint16_t itemCount()
     case Screen::ModeList: return MODE_COUNT;
     case Screen::PlanList: return TRAIN_PLAN_COUNT;
     case Screen::VolumeList: return VOLUME_COUNT;
-    case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
-    case Screen::BpmStatus: return bpmAnalysisActive() ? BPM_STATUS_CANCEL + 1 : BPM_STATUS_BACK + 1;
+    case Screen::GenreList: return GENRE_CHOICE_COUNT;
+    case Screen::BpmStatus: return BPM_STATUS_BACK + 1;
     case Screen::AgeEdit: return 1;
     case Screen::SongList: return songCount();
     case Screen::SongMenu: return songMenuFromList ? 4 : 3;
-    case Screen::SourceList: return SOURCE_LIST_COUNT;
-    case Screen::BleList: return BLE_LIST_COUNT;
+    case Screen::BleList: return 3;
+    case Screen::CustomList: return 3;
     case Screen::PowerConfirm: return POWER_CONFIRM_COUNT;
-    case Screen::ClearConfirm: return POWER_CONFIRM_COUNT;
+    case Screen::DebugList: return DebugBack + 1;
+    case Screen::AnalysisList: return AnalysisBack + 1;
+    case Screen::AnalysisConfirm: return 2;
     default: return topRowCount();
     }
 }
@@ -260,15 +265,17 @@ const char* screenName(Screen value)
     case Screen::ModeList: return "ModeList";
     case Screen::PlanList: return "PlanList";
     case Screen::VolumeList: return "VolumeList";
-    case Screen::BpmAnalysisList: return "BpmAnalysisList";
+    case Screen::GenreList: return "GenreList";
     case Screen::BpmStatus: return "BpmStatus";
     case Screen::SongList: return "SongList";
     case Screen::SongMenu: return "SongMenu";
-    case Screen::SourceList: return "SourceList";
     case Screen::BleList: return "BleList";
+    case Screen::CustomList: return "CustomList";
     case Screen::PowerConfirm: return "PowerConfirm";
-    case Screen::ClearConfirm: return "ClearConfirm";
     case Screen::AgeEdit: return "AgeEdit";
+    case Screen::DebugList: return "DebugList";
+    case Screen::AnalysisList: return "AnalysisList";
+    case Screen::AnalysisConfirm: return "AnalysisConfirm";
     }
     return "?";
 }
@@ -277,7 +284,7 @@ const char* topItemName(uint8_t item)
 {
     switch (item) {
     case TopMode: return "Mode";
-    case TopStatus: return "Status";
+    case TopGenre: return "Genre";
     case TopPlay: return "Play/Pause";
     case TopSongBpm: return "Song BPM";
     case TopSongs: return "Songs";
@@ -285,9 +292,9 @@ const char* topItemName(uint8_t item)
     case TopVolume: return "Volume";
     case TopAge: return "Age";
     case TopBpmAnalysis: return "BPM analysis";
-    case TopSource: return "Source";
     case TopBle: return "BLE";
-    case TopInfoBar: return "Info bar";
+    case TopInput: return "Input";
+    case TopDebug: return "Debug";
     case TopPowerOff: return "Power off";
     }
     return "?";
@@ -312,10 +319,11 @@ void sendBleCommand(BleCommandType type, uint8_t device)
 
 bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy,
                  int16_t songIndex = -1, SensorSource source = SensorSource::Chest, uint8_t plan = 0,
-                 uint16_t bpm = 0, uint8_t age = 0)
+                 uint16_t bpm = 0, uint8_t age = 0, uint8_t genre = 0)
 {
     UiCommandElement command{};
     command.age = age;
+    command.genre = genre;
     command.bpm = bpm;
     command.command = type;
     command.trainPlan = plan;
@@ -333,6 +341,17 @@ bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMod
          modeName(mode));
     return true;
 }
+
+// The mirror changes only once controlTask has the command.
+bool setSensorSource(bool isPpg, SensorSource source)
+{
+    if (!sendCommand(isPpg ? UiCommandType::SetPpgSource : UiCommandType::SetImuSource, 0, PlayMode::Enjoy, -1,
+                     source))
+        return false;
+    (isPpg ? ppgSource : imuSource) = source;
+    return true;
+}
+
 void openList(Screen list, uint16_t selected)
 {
     LOGD(TAG, "screen %s -> %s (cursor %u)", screenName(screen), screenName(list), static_cast<unsigned>(selected));
@@ -347,6 +366,37 @@ void backToTop(TopItem item)
     screen = Screen::Top;
     cursor = topRowOf(item);
     menuTop = 0;
+}
+
+void showBpmStatus()
+{
+    screen = Screen::BpmStatus;
+    cursor = BPM_STATUS_BACK;
+    menuTop = 0;
+}
+
+// Starts a scan and shows its progress; while one is queued or running, only shows it.
+void startBpmScan(BpmAnalysisMode mode)
+{
+    if (bpmAnalysisActive()) {
+        LOGD(TAG, "BPM analysis already active; showing status");
+        showBpmStatus();
+        return;
+    }
+    LOGI(TAG, "BPM %s requested from menu", mode == BpmAnalysisMode::All ? "reanalyze all" : "rescan");
+    bpmAnalysisMode = mode;
+    bpmAnalysisState = BpmAnalysisState::Queued;
+    bpmAnalysisCurrent = 0;
+    bpmAnalysisTotal = 0;
+    bpmAnalysisSucceeded = 0;
+    bpmAnalysisFailed = 0;
+    bpmAnalysisFile[0] = 0;
+    if (!sendCommand(mode == BpmAnalysisMode::All ? UiCommandType::ReanalyzeAllBpm
+                                                  : UiCommandType::AnalyzeNewOrUnknownBpm)) {
+        bpmAnalysisState = BpmAnalysisState::Failed;
+        bpmAnalysisFailed = 1;
+    }
+    showBpmStatus();
 }
 
 void activateItem()
@@ -369,6 +419,14 @@ void activateItem()
     case Screen::VolumeList:
         backToTop(TopVolume);
         break;
+    case Screen::GenreList:
+        if (cursor != preferredGenre &&
+            sendCommand(UiCommandType::SetGenre, 0, PlayMode::Enjoy, -1, SensorSource::Chest, 0, 0, 0,
+                        static_cast<uint8_t>(cursor))) {
+            preferredGenre = static_cast<uint8_t>(cursor);
+        }
+        backToTop(TopGenre);
+        break;
     case Screen::AgeEdit:
         if (ageEdit != userInfo.age) {
             LOGI(TAG, "age %d -> %u requested", userInfo.age, static_cast<unsigned>(ageEdit));
@@ -376,45 +434,8 @@ void activateItem()
         }
         backToTop(TopAge);
         break;
-    case Screen::BpmAnalysisList: {
-        if (cursor == 3) {
-            backToTop(TopBpmAnalysis);
-            break;
-        }
-        if (cursor == 2) {
-            openList(Screen::ClearConfirm, 0);  // default to Cancel against a stray press
-            break;
-        }
-        const bool newOrUnknown = cursor == 0;
-        const UiCommandType command = newOrUnknown
-            ? UiCommandType::AnalyzeNewOrUnknownBpm
-            : UiCommandType::ReanalyzeAllBpm;
-        bpmAnalysisMode = newOrUnknown
-            ? BpmAnalysisMode::NewOrUnknown
-            : BpmAnalysisMode::All;
-        LOGI(TAG, "BPM analysis requested from menu: %s", newOrUnknown ? "new/unknown" : "reanalyze all");
-        bpmAnalysisState = BpmAnalysisState::Queued;
-        bpmAnalysisCurrent = 0;
-        bpmAnalysisTotal = 0;
-        bpmAnalysisSucceeded = 0;
-        bpmAnalysisFailed = 0;
-        bpmAnalysisFile[0] = 0;
-        if (!sendCommand(command)) {
-            bpmAnalysisState = BpmAnalysisState::Failed;
-            bpmAnalysisFailed = 1;
-        }
-        screen = Screen::BpmStatus;
-        cursor = BPM_STATUS_BACK;
-        menuTop = 0;
-        break;
-    }
     case Screen::BpmStatus:
-        // Back leaves the scan running in the background; only the Cancel row stops it.
-        if (cursor == BPM_STATUS_CANCEL && bpmAnalysisActive()) {
-            sendCommand(UiCommandType::CancelBpmAnalysis);
-            bpmAnalysisState = BpmAnalysisState::Cancelled;
-        }
-        backToTop(TopBpmAnalysis);
+        backToTop(TopBpmAnalysis);  // the scan keeps running in the background
         break;
     case Screen::SongList:
         if (cursor < musicLibrary.count) {
@@ -442,53 +463,61 @@ void activateItem()
         }
         break;
     }
-    case Screen::SourceList:
+    case Screen::BleList:
         if (cursor >= 2) {
-            backToTop(TopSource);
-        } else {
-            // OK cycles Chest -> Watch -> Local in place.
-            const bool isPpg = cursor == 0;
-            SensorSource& current = isPpg ? ppgSource : imuSource;
-            const SensorSource next = static_cast<SensorSource>((static_cast<uint8_t>(current) + 1) % SOURCE_COUNT);
-            if (sendCommand(isPpg ? UiCommandType::SetPpgSource : UiCommandType::SetImuSource, 0, PlayMode::Enjoy, -1,
-                            next)) {
-                current = next;
-            }
-        }
-        break;
-    case Screen::BleList: {
-        if (cursor >= 4) {
             backToTop(TopBle);
-            break;
-        }
-        const uint8_t device = cursor / 2;
-        if (cursor % 2 == 0) {
-            if (bleLink[device] == BleLinkState::Up) sendBleCommand(BleCommandType::Disconnect, device);
-            else if (bleLink[device] == BleLinkState::Down) sendBleCommand(BleCommandType::Connect, device);
         } else {
-            sendBleCommand(bleAuto[device] ? BleCommandType::SetManual : BleCommandType::SetAuto, device);
+            // Watch row first; Auto keeps (re)connecting, Disconnect drops the link and turns Auto off.
+            const uint8_t device = cursor == 0 ? 1 : 0;
+            sendBleCommand(bleAuto[device] ? BleCommandType::Disconnect : BleCommandType::SetAuto, device);
         }
         break;
-    }
-    case Screen::ClearConfirm:
-        if (cursor == 1) {
-            LOGI(TAG, "clear all analysis results requested from menu");
-            sendCommand(UiCommandType::ClearAnalysisResults);
+    case Screen::CustomList:
+        if (cursor >= 2) {
+            backToTop(TopInput);
+        } else {
+            // OK cycles PPG or IMU alone (Chest -> Watch -> Local).
+            const bool isPpg = cursor == 0;
+            const SensorSource current = isPpg ? ppgSource : imuSource;
+            setSensorSource(isPpg, static_cast<SensorSource>((static_cast<uint8_t>(current) + 1) % SOURCE_COUNT));
         }
-        backToTop(TopBpmAnalysis);
         break;
     case Screen::PowerConfirm:
         // Standby starts only once controlTask has the command.
         if (cursor == 1 && sendCommand(UiCommandType::PowerOff)) powerOffRequested = true;
         else backToTop(TopPowerOff);
         break;
+    case Screen::DebugList:
+        if (cursor == DebugInfoBar) infoBar = !infoBar;
+        else if (cursor == DebugAnalysis) openList(Screen::AnalysisList, 0);
+        else backToTop(TopDebug);
+        break;
+    case Screen::AnalysisList:
+        if (cursor == AnalysisBack) {
+            openList(Screen::DebugList, DebugAnalysis);
+        } else {
+            analysisConfirmItem = static_cast<uint8_t>(cursor);
+            openList(Screen::AnalysisConfirm, 0);  // default to Cancel: both drop the user's BPM corrections
+        }
+        break;
+    case Screen::AnalysisConfirm:
+        if (cursor == 0) {
+            openList(Screen::AnalysisList, analysisConfirmItem);
+        } else if (analysisConfirmItem == AnalysisReanalyzeAll) {
+            startBpmScan(BpmAnalysisMode::All);
+        } else {
+            LOGI(TAG, "clear all BPM / genre results requested from menu");
+            sendCommand(UiCommandType::ClearAnalysisResults);  // audioTask cancels a running scan first
+            openList(Screen::AnalysisList, AnalysisClearAll);
+        }
+        break;
     default:
         switch (topItemAt(cursor)) {
         case TopMode:
             openList(Screen::ModeList, static_cast<uint8_t>(playMode));
             break;
-        case TopStatus:
-            if (playMode == PlayMode::Train) sendCommand(UiCommandType::RestartTrain);  // others are read-only
+        case TopGenre:
+            openList(Screen::GenreList, preferredGenre);
             break;
         case TopPlay:
             if (audioState == AudioState::Playing) sendCommand(UiCommandType::Pause);
@@ -518,23 +547,29 @@ void activateItem()
             openList(Screen::AgeEdit, 0);
             break;
         case TopBpmAnalysis:
-            if (bpmAnalysisActive()) {
-                LOGD(TAG, "BPM analysis already active; showing status");
-                screen = Screen::BpmStatus;
-                cursor = BPM_STATUS_BACK;
-                menuTop = 0;
-            } else {
-                openList(Screen::BpmAnalysisList, 0);
-            }
-            break;
-        case TopSource:
-            openList(Screen::SourceList, 0);
+            // One-button rescan: new / replaced / unknown only; reanalyze-all and clear are under Debug.
+            startBpmScan(BpmAnalysisMode::NewOrUnknown);
             break;
         case TopBle:
             openList(Screen::BleList, 0);
             break;
-        case TopInfoBar:
-            infoBar = !infoBar;
+        case TopInput:
+            // OK cycles Watch -> Chest -> Local (PPG and IMU together) -> Custom, which opens the PPG / IMU list.
+            if (customInput) {
+                const bool ppgOk = setSensorSource(true, SensorSource::Watch);
+                // A dropped command leaves PPG and IMU apart: they stay Custom.
+                customInput = !(setSensorSource(false, SensorSource::Watch) && ppgOk);
+            } else if (ppgSource == SensorSource::Local) {
+                customInput = true;
+                openList(Screen::CustomList, 0);
+            } else {
+                const SensorSource s = ppgSource == SensorSource::Watch ? SensorSource::Chest : SensorSource::Local;
+                const bool ppgOk = setSensorSource(true, s);
+                customInput = !(setSensorSource(false, s) && ppgOk);
+            }
+            break;
+        case TopDebug:
+            openList(Screen::DebugList, 0);
             break;
         case TopPowerOff:
             openList(Screen::PowerConfirm, 0);  // default to Cancel against a stray press
@@ -546,6 +581,13 @@ void activateItem()
 
 void applyUpdate(const UiUpdateElement& update)
 {
+    // OKT: state updates within 5 s of an OK press (sensor / BLE / target streams skipped).
+    if (okPressMs != 0 && (uint32_t)(millis() - okPressMs) < 5000 && update.type != UiUpdateType::Sensor &&
+        update.type != UiUpdateType::Acc && update.type != UiUpdateType::Gyro && update.type != UiUpdateType::Ble &&
+        update.type != UiUpdateType::Analysis && update.type != UiUpdateType::Motion) {
+        LOGI(TAG, "OKT 4 UI update type=%u (+%lu ms since OK)", static_cast<unsigned>(update.type),
+             static_cast<unsigned long>(millis() - okPressMs));
+    }
     switch (update.type) {
     case UiUpdateType::Ble:
         for (uint8_t i = 0; i < 2; ++i) {
@@ -583,7 +625,6 @@ void applyUpdate(const UiUpdateElement& update)
     }
     case UiUpdateType::Analysis:
         targetBpm = update.targetBpm;
-        targetZone = update.zone;
         break;
     case UiUpdateType::Motion:
         motionLevel = update.activityLevel;
@@ -628,7 +669,6 @@ void applyUpdate(const UiUpdateElement& update)
             strncpy(bpmAnalysisFile, update.filename, sizeof(bpmAnalysisFile) - 1);
             bpmAnalysisFile[sizeof(bpmAnalysisFile) - 1] = 0;
         }
-        if (screen == Screen::BpmStatus && cursor >= itemCount()) cursor = BPM_STATUS_BACK;  // Cancel row gone
         break;
     default:
         break;
@@ -649,26 +689,37 @@ void itemLabel(uint16_t item, char* out, size_t size)
         snprintf(out, size, "Volume %u%%%s", item * VOLUME_STEP,
                  item * VOLUME_STEP == volumePercent ? " *" : "");
         return;
-    case Screen::BpmAnalysisList:
-        snprintf(out, size, "%s", item == 0 ? "New / unknown BPM" : item == 1 ? "Reanalyze all BPM"
-                                : item == 2 ? "Clear all results" : "Cancel");
-        return;
-    case Screen::SourceList:
-        if (item >= 2) snprintf(out, size, "OK: Back");
-        else snprintf(out, size, "%s: %s", item == 0 ? "PPG" : "IMU",
-                      sourceLabel(item == 0 ? ppgSource : imuSource));
+    case Screen::GenreList:
+        snprintf(out, size, "%s%s", GENRE_CHOICES[item], item == preferredGenre ? " *" : "");
         return;
     case Screen::BleList:
-        if (item >= 4) snprintf(out, size, "OK: Back");
-        else if (item % 2 == 0) snprintf(out, size, "%s: %s", sourceLabel(static_cast<SensorSource>(item / 2)),
-                                         linkLabel(bleLink[item / 2]));
-        else snprintf(out, size, "  Mode: %s", bleAuto[item / 2] ? "Auto" : "Manual");
+        if (item >= 2) {
+            snprintf(out, size, "OK: Back");
+        } else {
+            const uint8_t d = item == 0 ? 1 : 0;
+            // While down the mode is shown: "Auto" waits for the next retry, "Off" stays down.
+            snprintf(out, size, "%s: %s", sourceLabel(static_cast<SensorSource>(d)),
+                     bleLink[d] != BleLinkState::Down ? linkLabel(bleLink[d]) : bleAuto[d] ? "Auto" : "Off");
+        }
+        return;
+    case Screen::CustomList:
+        if (item >= 2) snprintf(out, size, "OK: Back");
+        else snprintf(out, size, "%s: %s", item == 0 ? "PPG" : "IMU", sourceLabel(item == 0 ? ppgSource : imuSource));
         return;
     case Screen::PowerConfirm:
         snprintf(out, size, "%s", item == 0 ? "Cancel" : "Power off");
         return;
-    case Screen::ClearConfirm:
-        snprintf(out, size, "%s", item == 0 ? "Cancel" : "Clear BPM + genre");
+    case Screen::DebugList:
+        if (item == DebugInfoBar) snprintf(out, size, "Info bar: %s", infoBar ? "On" : "Off");
+        else snprintf(out, size, "%s", item == DebugAnalysis ? "Analysis" : "Back");
+        return;
+    case Screen::AnalysisList:
+        snprintf(out, size, "%s", item == AnalysisReanalyzeAll ? "Reanalyze all"
+                                  : item == AnalysisClearAll ? "Clear all results" : "Back");
+        return;
+    case Screen::AnalysisConfirm:
+        if (item == 0) snprintf(out, size, "Cancel");
+        else snprintf(out, size, "%s", analysisConfirmItem == AnalysisReanalyzeAll ? "Confirm reanalyze" : "Confirm clear all");
         return;
     case Screen::AgeEdit:
         snprintf(out, size, "Age %u  HRmax %u", static_cast<unsigned>(ageEdit),
@@ -730,11 +781,8 @@ void itemLabel(uint16_t item, char* out, size_t size)
         case 2:
             snprintf(out, size, "%.21s", bpmAnalysisFile);
             break;
-        case BPM_STATUS_BACK:
-            snprintf(out, size, "Back");
-            break;
         default:
-            snprintf(out, size, "Cancel analysis");
+            snprintf(out, size, "Back");
             break;
         }
         return;
@@ -748,21 +796,8 @@ void itemLabel(uint16_t item, char* out, size_t size)
         else if (trainDone && playMode == PlayMode::Manual) snprintf(out, size, "Mode: Train done");
         else snprintf(out, size, "Mode: %s", modeName(playMode));
         break;
-    case TopStatus:
-        if (playMode == PlayMode::Train) {
-            if (trainStage < TRAIN_PLANS[trainPlan].stageCount)
-                snprintf(out, size, " Stage %u/%u %u:%02u", static_cast<unsigned>(trainStage + 1),
-                         static_cast<unsigned>(TRAIN_PLANS[trainPlan].stageCount), trainRemainingS / 60u,
-                         trainRemainingS % 60u);
-            else snprintf(out, size, " Stage --");
-        } else if (playMode == PlayMode::Demo) {
-            if (motionLevel == MOTION_LEVEL_NONE) snprintf(out, size, " Level: --");
-            else snprintf(out, size, " Level: %u", static_cast<unsigned>(motionLevel));
-        } else if (targetBpm == 0) {
-            snprintf(out, size, " Target: wait HR");
-        } else {
-            snprintf(out, size, " Z%u Target %u BPM", static_cast<unsigned>(targetZone), static_cast<unsigned>(targetBpm));
-        }
+    case TopGenre:
+        snprintf(out, size, "Genre: %s", GENRE_CHOICES[preferredGenre]);
         break;
     case TopPlay:
         snprintf(out, size, "%s",
@@ -792,18 +827,18 @@ void itemLabel(uint16_t item, char* out, size_t size)
         if (bpmAnalysisState == BpmAnalysisState::Queued)
             snprintf(out, size, "BPM: queued");
         else if (bpmAnalysisState == BpmAnalysisState::Running)
-            snprintf(out, size, "BPM: running");
+            snprintf(out, size, "BPM: %u / %u", bpmAnalysisCurrent, bpmAnalysisTotal);
         else
-            snprintf(out, size, "BPM Analysis");
-        break;
-    case TopSource:
-        snprintf(out, size, "Source");
+            snprintf(out, size, "Rescan BPM");
         break;
     case TopBle:
         snprintf(out, size, "BLE");
         break;
-    case TopInfoBar:
-        snprintf(out, size, "Info bar: %s", infoBar ? "On" : "Off");
+    case TopInput:
+        snprintf(out, size, "Input: %s", customInput ? "Custom" : sourceLabel(ppgSource));
+        break;
+    case TopDebug:
+        snprintf(out, size, "Debug");
         break;
     case TopPowerOff:
         snprintf(out, size, "Power off");
@@ -894,17 +929,34 @@ void drawHeader(char* line, size_t size)
     oled.setCursor(BAT_X - 2 - 6 * static_cast<int16_t>(strlen(line)), ICON_Y);
     oled.print(line);
 
-    // Second row: "001.mp3(136)", file name plus its library BPM, "--" when unknown.
-    oled.setCursor(0, SONG_Y);
-    if (audioState == AudioState::Stopped) {
-        oled.print("Stopped");
-    } else {
-        const int16_t i = playingLibraryIndex();
-        char bpmText[8] = "--";
-        if (i >= 0 && musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
-        snprintf(line, size, "%.15s(%s)", nowPlaying, bpmText);
-        oled.print(line);
+    // Second row: file name on the left, mode status on the right. Enjoy "136>140" (song BPM > target,
+    // "--" when unknown), Train "S2/5 3:12" (stage, time left), Demo "L3" (motion level), Manual the song BPM.
+    const int16_t i = audioState == AudioState::Stopped ? -1 : playingLibraryIndex();
+    char bpmText[8] = "--";
+    if (i >= 0 && musicLibrary.entries[i].bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", musicLibrary.entries[i].bpm);
+    char status[24] = "";
+    if (playMode == PlayMode::Train) {
+        if (trainStage < TRAIN_PLANS[trainPlan].stageCount)
+            snprintf(status, sizeof(status), "S%u/%u %u:%02u", static_cast<unsigned>(trainStage + 1),
+                     static_cast<unsigned>(TRAIN_PLANS[trainPlan].stageCount), trainRemainingS / 60u,
+                     trainRemainingS % 60u);
+        else snprintf(status, sizeof(status), "S--");
+    } else if (playMode == PlayMode::Demo) {
+        if (motionLevel == MOTION_LEVEL_NONE) snprintf(status, sizeof(status), "L-");
+        else snprintf(status, sizeof(status), "L%u", static_cast<unsigned>(motionLevel));
+    } else if (playMode == PlayMode::Enjoy) {
+        if (targetBpm == 0) snprintf(status, sizeof(status), "%s>--", bpmText);
+        else snprintf(status, sizeof(status), "%s>%u", bpmText, static_cast<unsigned>(targetBpm));
+    } else if (audioState != AudioState::Stopped) {
+        snprintf(status, sizeof(status), "%s", bpmText);
     }
+    const int statusLen = static_cast<int>(strlen(status));
+    const int nameMax = OledSh1106::WIDTH / 6 - statusLen - 1;  // one blank column before the status
+    snprintf(line, size, "%.*s", nameMax, audioState == AudioState::Stopped ? "Stopped" : nowPlaying);
+    oled.setCursor(0, SONG_Y);
+    oled.print(line);
+    oled.setCursor(OledSh1106::WIDTH - 6 * statusLen, SONG_Y);
+    oled.print(status);
     oled.drawFastHLine(0, HEADER_LINE_Y, OledSh1106::WIDTH, 1);
 }
 
@@ -1195,11 +1247,7 @@ void UITask(void* parameter) {
             if (downPressed && ageEdit > USER_AGE_MIN) --ageEdit;
             dirty = dirty || upPressed || downPressed;
         } else if (screen == Screen::BpmStatus) {
-            // Only Back and Cancel are selectable; the other rows are status text.
-            if ((upPressed || downPressed) && bpmAnalysisActive()) {
-                cursor = cursor == BPM_STATUS_BACK ? BPM_STATUS_CANCEL : BPM_STATUS_BACK;
-                dirty = true;
-            }
+            // Only Back is selectable; the other rows are status text.
         } else {
             if (upPressed) {
                 cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
@@ -1209,7 +1257,10 @@ void UITask(void* parameter) {
                 cursor = cursor + 1 >= itemCount() ? 0 : cursor + 1;
                 dirty = true;
             }
-        }        if (buttonPressed(buttons[2])) {
+        }
+        if (buttonPressed(buttons[2])) {
+            okPressMs = millis();
+            LOGI(TAG, "OKT 1 OK pressed (screen=%s cursor=%u)", screenName(screen), static_cast<unsigned>(cursor));
             activateItem();
             dirty = true;
         }

@@ -68,12 +68,12 @@
 ## OLED 手動選歌
 
 - 只有 Manual 模式的主選單有 Songs，列出 musicLibrary（檔名與 BPM，未分析顯示 `--`）；按 OK 開啟單曲選單 Play／BPM x2／BPM /2／Back。Play 送出 `PlaySong`，controlTask 轉成 `Play` 並進入手動模式，之後須在 Mode 選 Enjoy／Train 或序列埠 `auto` 才恢復自動選曲。
-- BPM 倍數修正：演算法偶爾把節拍判成兩倍或一半，由使用者修正。播放或暫停中，主選單多一列 `Song BPM: 120`，按 OK 開啟同一個單曲選單（無 Play）。x2／/2 送出 `SetSongBpm`（結果須在 30～300），controlTask 轉給 audioTask 寫入 `music_library.json`；BPM 掃描進行中也可修正。之後「Reanalyze all BPM」會覆蓋使用者修正（2026-10-22 使用者決定）。修正不改變手動／自動模式。
+- BPM 倍數修正：演算法偶爾把節拍判成兩倍或一半，由使用者修正。播放或暫停中，主選單多一列 `Song BPM: 120`，按 OK 開啟同一個單曲選單（無 Play）。x2／/2 送出 `SetSongBpm`（結果須在 30～300），controlTask 轉給 audioTask 寫入 `music_library.json`；BPM 掃描進行中也可修正。之後全部重分析（OLED `Debug` → `Analysis` → `Reanalyze all` 或序列埠 `bpm all`）會覆蓋使用者修正（2026-10-22 使用者決定）。修正不改變手動／自動模式。
 - 曲庫未載入、BPM 分析進行中或沒有曲目時不開啟清單。未分析 BPM 的曲目可手動播放，但不參加自動選曲。
 
 ## OLED 手動 BPM 分析
 
-- 主選單的 BPM Analysis 子選單有 New / unknown BPM、Reanalyze all BPM 與 Clear all results（需確認）。分析中進入會顯示進度頁：`Back` 回主選單、分析在背景繼續；`Cancel analysis` 才取消。
+- 主選單的 `Rescan BPM` 是單一按鍵：按 OK 重新掃描 SD 並分析新檔／未知 BPM 或曲風的歌曲，接著顯示進度頁；分析中標籤顯示 `BPM: n / total`，再按 OK 開進度頁：`Back` 回主選單、分析在背景繼續；OLED 不提供取消，取消用序列埠 `bpm cancel` 或關機待機。全部重分析與清除全部結果放在 `Debug` → `Analysis`（先確認，預設 Cancel），序列埠 `bpm all`／`bpm clear` 也可。
 - 開機時自動跑一次「新檔／未知」掃描；之後由使用者啟動。controlTask 轉送請求；audioTask 在播放空檔掃描 SD 並呼叫 music_bpm_analyzer（播放優先，見 AGENTS.md 4.2），不新增 FreeRTOS task，也不在 analysisTask 執行。
 - 自動模式下若沒有任何歌有 BPM，controlTask 先隨機播一首；每有一首歌分析出 BPM 就重試，有可選的歌即替換掉隨機歌。分析以 Helix 解碼 MP3、混成單聲道 PCM，分段送入 `bpm_tempo.h`；最多分析 60 秒，少於 8 秒或沒有有效估計就算失敗。每首完成時印出 `timing:` log（解碼、特徵、估計各自耗時）。
 - `bpm_tempo.h`（2026-10-22 取代 MiniBPM）：log-mel 頻譜差 onset 曲線（全頻＋4 頻帶）→ 自相關與傅立葉週期分布 → 約 25 個候選 → 300 棵梯度提升樹（`bpm_tempo_model.h`）打分取最高。模型以 GTZAN、Ballroom、GiantSteps Tempo、ISMIR04 Songs 共 2824 首訓練；重新訓練用 `firmware/hub8735-ultra/tools/bpm_tempo/`（`dump.cpp` 用同一份 `bpm_tempo.h` 在電腦上算特徵，`train.py` 匯出模型）。2026-10-22 起特徵改用與 HUB 相同的 Helix 解碼計算（先前用 minimp3）。保留測試集 1404 首（Helix 特徵）：直接正確 75.4%（MiniBPM 56.8%），含 x2／/2 可修正 90.5%（MiniBPM 76.1%）；<70 BPM 的可修正率最低（68%）。板上實測（CMSIS FFT）：60 秒音訊約 12 秒、20～34 秒音訊 3～6 秒；SD 卡 42 首測試曲取自保留測試集，且不參與最終模型訓練（模型以其餘 2782 首訓練），只作驗證：直接正確 26、含 x2／/2 可修正 34（MiniBPM 19／31）；每首開頭丟 3 個 frame 後，42 首 PCM 雜湊與電腦版 Helix 完全相同。每首的 timing log 附 `pcm <雜湊>/<樣本數>`，可與 `dump.cpp -DDUMP_ESTIMATE`（電腦端改用同一個 Helix 解碼）比對解碼是否一致。

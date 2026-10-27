@@ -62,7 +62,7 @@ Queue（名稱照 `globalData.h`）：`bleRxFrameQueue`、`ppgSensorQueue`、`ac
 - `analysisTask`：有效 PPG（`status==2` 且 HR≠0）→ HRmax → 穩定 Zone（越界 2% HRmax 並維持 10 s 才換區）→ 目標 BPM（1 Hz，上升每次最多 +5、下降立即）。只輸出目標 BPM，不碰播放。
 - `controlTask`：自動／手動模式；手動（play/pause/stop）優先，只有明確 `auto`／選 Enjoy／Train 才恢復；目前依目標 BPM ±5% 內符合者選曲，否則最近 BPM；播放失敗跳過、全失敗則停止。
 - `audioTask`：**唯一**呼叫 MAX98357 與**唯一**擁有 SD；回報 `Finished`／失敗；歌曲停止後才執行 BPM 掃描（Helix 解 MP3 → 單聲道 PCM → `bpm_tempo.h`，最多 60 s）。
-- `UITask`：OLED 選單（Mode、Play/Pause、Stop、Volume、BPM Analysis、Songs）→ `uiCmdQueue` → `controlTask`。
+- `UITask`：OLED 選單（Mode、Play/Pause、Stop、Volume、Rescan BPM、Songs）→ `uiCmdQueue` → `controlTask`。
 - 感測斷線：已有有效心率後失聯，沿用最後目標 BPM 繼續播放。
 
 ### 資料路徑（每條邊標「資料內容＋介面／頻率」）
