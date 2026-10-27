@@ -1,6 +1,11 @@
 #include "controlTask.h"
 
+#include <cstdlib>
 #include <cstring>
+
+extern "C" {
+#include "flash_api.h"
+}
 
 #include "motion_level.h"
 #include "song_catalog.h"
@@ -21,6 +26,12 @@ bool pendingAutoPlay = false;
 bool pendingAfterFinish = false;
 uint8_t motionLevel = MOTION_LEVEL_NONE;
 bool demoPending = false;
+// Pause in an automatic mode keeps the mode; selection, DEMO switches and Train time wait until Resume.
+bool userPaused = false;
+// The automatic song was picked at random because no song had a BPM yet; replaced once one has.
+bool randomFill = false;
+uint32_t seenLibraryRevision = 0;
+bool settingsSaveAge(uint8_t age);
 // DEMO playback uses songIndex DEMO_SONG_BASE - level so its events never match a library index.
 constexpr int16_t DEMO_SONG_BASE = -10;
 // Train progress: frozen while not in Train (manual, standby), resumed when the same plan is chosen again.
@@ -69,6 +80,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::RestartTrain: return "RestartTrain";
     case UiCommandType::SetSongBpm: return "SetSongBpm";
     case UiCommandType::ClearAnalysisResults: return "ClearAnalysisResults";
+    case UiCommandType::SetAge: return "SetAge";
     }
     return "?";
 }
@@ -136,6 +148,10 @@ bool sendAudioCommand(const AudioCmdElement& command)
 void playDemoForLevel()
 {
     if (!automaticMode || playMode != PlayMode::Demo) return;
+    if (userPaused) {
+        demoPending = true;  // the level that holds at Resume plays then
+        return;
+    }
     if (motionLevel == MOTION_LEVEL_NONE) {
         LOGI(TAG, "DEMO: waiting for motion data");
         return;
@@ -156,7 +172,7 @@ void playDemoForLevel()
 
 void updateMotionLevel(uint8_t level)
 {
-    if (level >= MOTION_LEVELS) {
+    if (level >= MOTION_LEVELS && level != MOTION_LEVEL_NONE) {
         LOGW(TAG, "ignored invalid motion level %u", static_cast<unsigned>(level));
         return;
     }
@@ -179,9 +195,7 @@ uint16_t selectionBpm()
 {
     if (playMode != PlayMode::Train) return haveTargetBpm ? targetBpm : 0;
     if (!trainRunning || trainStage == TRAIN_STAGE_DONE) return 0;
-    const float hrmax = userInfo.HRmax();
-    return train_stage_bpm(hrmax > 0.0f ? static_cast<uint16_t>(hrmax + 0.5f) : 0,
-                           TRAIN_PLANS[trainPlan].stages[trainStage].zone);
+    return train_stage_bpm(userInfo.hrmaxBpm(), TRAIN_PLANS[trainPlan].stages[trainStage].zone);
 }
 
 void selectSongForTarget(bool afterFinish)
@@ -193,14 +207,14 @@ void selectSongForTarget(bool afterFinish)
              static_cast<unsigned>(wantBpm));
         return;
     }
-    if (musicBpmAnalysisBusy) {
-        if (!pendingAutoPlay) LOGI(TAG, "BPM analysis running; automatic selection deferred");
+    if (userPaused || musicBpmAnalysisBusy) {
+        if (!pendingAutoPlay) LOGI(TAG, "%s; automatic selection deferred", userPaused ? "paused" : "BPM analysis running");
         pendingAutoPlay = true;
         pendingAfterFinish = afterFinish;
         return;
     }
 
-    const int selected = afterFinish
+    int selected = afterFinish
         ? songAfterFinish(wantBpm, currentSong, failedSongMask)
         : songForStart(wantBpm, currentSong, failedSongMask);
     {
@@ -215,6 +229,9 @@ void selectSongForTarget(bool afterFinish)
              afterFinish ? "after finish" : "start/zone change", static_cast<unsigned>(wantBpm), currentSong,
              static_cast<unsigned>(musicLibrary.count), withBpm, excluded, matching, selected);
     }
+    // No song has a BPM yet: play a random one now; a song that gets a BPM replaces it (controlTask loop).
+    const bool random = selected < 0;
+    if (random) selected = randomSong(static_cast<uint32_t>(rand()), currentSong, failedSongMask);
     if (selected < 0) {
         pendingAutoPlay = false;
         LOGW(TAG, "no playable song (library=%u); nothing to play",
@@ -238,9 +255,10 @@ void selectSongForTarget(bool afterFinish)
         currentSong = selected;
         automaticSongActive = true;
         pendingAutoPlay = false;
-        LOGI(TAG, "auto selected #%d %s (%u BPM) for target %u BPM", selected,
+        randomFill = random;
+        LOGI(TAG, "auto selected #%d %s (%u BPM) for target %u BPM%s", selected,
              musicLibrary.entries[selected].file, static_cast<unsigned>(musicLibrary.entries[selected].bpm),
-             static_cast<unsigned>(wantBpm));
+             static_cast<unsigned>(wantBpm), random ? " (random: no song has a BPM yet)" : "");
     } else {
         pendingAutoPlay = true;
         pendingAfterFinish = afterFinish;
@@ -345,6 +363,10 @@ void updateTraining()
 {
     if (!automaticMode || playMode != PlayMode::Train || !trainRunning) return;
     const uint32_t now = millis();
+    if (userPaused) {
+        trainLastTickMs = now;  // the plan is frozen while paused
+        return;
+    }
     trainElapsedMs += now - trainLastTickMs;
     trainLastTickMs = now;
     uint16_t remaining = 0;
@@ -381,6 +403,7 @@ void enterManualMode()
     automaticSongActive = false;
     pendingAutoPlay = false;
     demoPending = false;
+    userPaused = false;
 }
 
 void sendManualCommand(AudioCmdElement& command)
@@ -389,10 +412,50 @@ void sendManualCommand(AudioCmdElement& command)
     sendAudioCommand(command);  // failure is logged there
 }
 
+// Pause / Resume keep an automatic mode (user decision 2026-10-27); only Stop or a manual song leaves it.
+// Sensor updates never resume a pause: selection waits in pendingAutoPlay / demoPending until Resume.
+void pausePlayback()
+{
+    AudioCmdElement command{};
+    command.command = AudioCommandType::Pause;
+    if (!automaticMode) {
+        sendManualCommand(command);
+        return;
+    }
+    if (audioPlaybackState != AudioState::Playing) {
+        LOGW(TAG, "pause ignored: nothing is playing");
+        return;
+    }
+    if (sendAudioCommand(command)) {
+        userPaused = true;
+        LOGI(TAG, "paused; %s stays on until Resume", modeLabel(playMode));
+    }
+}
+
+void resumePlayback()
+{
+    AudioCmdElement command{};
+    command.command = AudioCommandType::Resume;
+    if (!automaticMode) {
+        sendManualCommand(command);
+        return;
+    }
+    if (!userPaused) {
+        LOGW(TAG, "resume ignored: not paused");
+        return;
+    }
+    if (sendAudioCommand(command)) {
+        userPaused = false;
+        trainLastTickMs = millis();
+        LOGI(TAG, "resumed %s", modeLabel(playMode));
+    }
+}
+
 void enableAutomaticMode(PlayMode mode, uint8_t plan = 0)
 {
     const bool leavingDemo = playMode == PlayMode::Demo && mode != PlayMode::Demo;
     setPlayMode(mode);
+    userPaused = false;  // a mode chosen while paused starts playing
     memset(failedSongMask, 0, sizeof(failedSongMask));
     initialSelectionAttempted = false;
     if (mode == PlayMode::Train) {
@@ -584,6 +647,17 @@ void enterStandby()
     automaticSongActive = false;
     pendingAutoPlay = false;
     demoPending = false;
+    userPaused = false;
+    // Another person may wear the sensor after standby: wait for a fresh heart rate (analysisTask resets too).
+    haveTargetBpm = false;
+    targetBpm = 0;
+    activeZone = 0;
+    if (uiUpdateQueue != nullptr) {
+        UiUpdateElement update{};
+        update.type = UiUpdateType::Analysis;
+        update.timestampMs = millis();
+        xQueueSend(uiUpdateQueue, &update, pdMS_TO_TICKS(20));
+    }
     AudioCmdElement command{};
     command.command = AudioCommandType::CancelBpmAnalysis;
     sendAudioCommand(command);
@@ -621,12 +695,10 @@ void handleUiCommand(const UiCommandElement& cmd)
         }
         break;
     case UiCommandType::Pause:
-        command.command = AudioCommandType::Pause;
-        sendManualCommand(command);
+        pausePlayback();
         break;
     case UiCommandType::Resume:
-        command.command = AudioCommandType::Resume;
-        sendManualCommand(command);
+        resumePlayback();
         break;
     case UiCommandType::Stop:
         command.command = AudioCommandType::Stop;
@@ -685,7 +757,23 @@ void handleUiCommand(const UiCommandElement& cmd)
     case UiCommandType::PowerOn:
         if (!systemStandby) break;
         systemStandby = false;
-        LOGI(TAG, "power on: playback stays stopped until a mode or song is chosen");
+        // Wake = boot: Enjoy, playing once a fresh valid heart rate arrives (user decision 2026-10-27).
+        LOGI(TAG, "power on: Enjoy, waiting for a valid heart rate");
+        enableAutomaticMode(PlayMode::Enjoy);
+        break;
+    case UiCommandType::SetAge:
+        if (cmd.age < USER_AGE_MIN || cmd.age > USER_AGE_MAX) {
+            LOGW(TAG, "SetAge ignored: %u outside %u..%u", static_cast<unsigned>(cmd.age),
+                 static_cast<unsigned>(USER_AGE_MIN), static_cast<unsigned>(USER_AGE_MAX));
+            break;
+        }
+        if (cmd.age == userInfo.age) break;
+        userInfo.age = cmd.age;  // analysisTask and Train pick up the new HRmax on their next update
+        if (settingsSaveAge(cmd.age)) {
+            LOGI(TAG, "age %u saved (HRmax %u)", static_cast<unsigned>(cmd.age), static_cast<unsigned>(userInfo.hrmaxBpm()));
+        } else {
+            LOGE(TAG, "age %u applied but not saved to flash", static_cast<unsigned>(cmd.age));
+        }
         break;
     }
 }
@@ -697,8 +785,10 @@ const char* sourceLabel(SensorSource source)
 // "status": snapshot of controlTask state for the PC console (apps/hub_serial_console).
 void reportStatus()
 {
-    LOGI(TAG, "status: mode=%s automatic=%d target=%u zone=%u motion=%u ppg=%s imu=%s songs=%u analysis=%d heap=%u",
-         modeLabel(playMode), automaticMode ? 1 : 0, haveTargetBpm ? static_cast<unsigned>(targetBpm) : 0u,
+    LOGI(TAG, "status: mode=%s automatic=%d paused=%d random=%d age=%d target=%u zone=%u motion=%u ppg=%s imu=%s "
+         "songs=%u analysis=%d heap=%u",
+         modeLabel(playMode), automaticMode ? 1 : 0, userPaused ? 1 : 0, randomFill ? 1 : 0, userInfo.age,
+         haveTargetBpm ? static_cast<unsigned>(targetBpm) : 0u,
          static_cast<unsigned>(activeZone), static_cast<unsigned>(motionLevel), sourceLabel(activePpgSource),
          sourceLabel(activeImuSource), static_cast<unsigned>(musicLibrary.count), musicBpmAnalysisBusy ? 1 : 0,
          static_cast<unsigned>(xPortGetFreeHeapSize()));
@@ -789,11 +879,9 @@ void handleSerialCommand(String input)
             LOGW(TAG, "volume command was not sent");
         }
     } else if (input.equalsIgnoreCase("pause")) {
-        command.command = AudioCommandType::Pause;
-        sendManualCommand(command);
+        pausePlayback();
     } else if (input.equalsIgnoreCase("resume")) {
-        command.command = AudioCommandType::Resume;
-        sendManualCommand(command);
+        resumePlayback();
     } else if (input.equalsIgnoreCase("bpm") || input.startsWith("bpm ")) {
         handleBpmSerial(input);
     } else if (input.equalsIgnoreCase("status")) {
@@ -803,13 +891,40 @@ void handleSerialCommand(String input)
     } else if (input.equalsIgnoreCase("help")) {
         LOGI(TAG, "commands: status | help | auto | demo | train [1|2] | play <file> | pause | resume | stop | volume <0-100>");
         LOGI(TAG, "  src ppg|motion chest|watch|local | ble connect|disconnect|auto|manual chest|watch");
-        LOGI(TAG, "  bpm list|new|all|cancel|x2 <song>|/2 <song>|set <song> <bpm>");
+        LOGI(TAG, "  bpm list|new|all|cancel|clear|x2 <song>|/2 <song>|set <song> <bpm>");
     } else {
         LOGW(TAG, "serial: unknown command '%s'", input.c_str());
     }
 }
 
+// Age word in the FlashMemory library's app area (last 192 KB of the 16 MB NOR): magic in the top
+// 24 bits, age in the low byte. Not FlashMemory itself: its global object mallocs the whole 192 KB.
+constexpr uint32_t SETTINGS_FLASH_ADDR = 0xFD0000;
+constexpr uint32_t SETTINGS_MAGIC = 0x49544100;  // "ITA"
+flash_t settingsFlash;
+
+// shortcut: the sector erase can stall flash-resident code for tens of ms and may click the audio;
+// only on an age change, move to a RAM-buffered write if it is heard.
+bool settingsSaveAge(uint8_t age)
+{
+    const uint32_t word = SETTINGS_MAGIC | age;
+    flash_erase_sector(&settingsFlash, SETTINGS_FLASH_ADDR);
+    flash_write_word(&settingsFlash, SETTINGS_FLASH_ADDR, word);
+    uint32_t check = 0;
+    flash_read_word(&settingsFlash, SETTINGS_FLASH_ADDR, &check);
+    return check == word;
+}
+
 } // namespace
+
+int settingsLoadAge()
+{
+    uint32_t word = 0;
+    flash_read_word(&settingsFlash, SETTINGS_FLASH_ADDR, &word);
+    const uint8_t age = static_cast<uint8_t>(word & 0xFF);
+    if ((word & 0xFFFFFF00u) == SETTINGS_MAGIC && age >= USER_AGE_MIN && age <= USER_AGE_MAX) return age;
+    return USER_AGE_DEFAULT;  // erased flash (0xFFFFFFFF) or never saved
+}
 
 void controlTask(void* parameter)
 {
@@ -822,6 +937,7 @@ void controlTask(void* parameter)
     }
     LOGI(TAG, "music library ready: %u songs, mode=%s", static_cast<unsigned>(musicLibrary.count),
          modeLabel(playMode));
+    srand(micros());  // SD and boot-scan timing vary, so the random fallback song differs per boot
     for (;;) {
         TargetBpmResult result{};
         while (targetBpmResultQueue != nullptr &&
@@ -854,7 +970,18 @@ void controlTask(void* parameter)
             else handleSerialCommand(input);
         }
 
-        if (pendingAutoPlay && automaticMode) {
+        // A song got a BPM while a random one plays: switch to a BPM match now (user decision 2026-10-27).
+        if (musicLibraryRevision != seenLibraryRevision) {
+            seenLibraryRevision = musicLibraryRevision;
+            const uint16_t want = selectionBpm();
+            if (automaticMode && randomFill && automaticSongActive && !userPaused && want != 0 &&
+                songForStart(want, currentSong, failedSongMask) >= 0) {
+                LOGI(TAG, "a song has a BPM now; replacing the random song");
+                automaticSongActive = false;
+                selectSongForTarget(false);
+            }
+        }
+        if (pendingAutoPlay && automaticMode && !userPaused) {
             if (!musicBpmAnalysisBusy) LOGD(TAG, "retrying deferred automatic selection");
             selectSongForTarget(pendingAfterFinish);
         }

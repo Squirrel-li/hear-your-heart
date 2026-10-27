@@ -38,6 +38,8 @@ volatile bool musicStorageReady = false;
 volatile bool musicBpmAnalysisBusy = false;
 volatile uint8_t audioBootProgress = 0;
 volatile bool systemStandby = false;
+volatile AudioState audioPlaybackState = AudioState::Stopped;
+volatile uint32_t musicLibraryRevision = 0;
 
 void setup()
 {
@@ -51,7 +53,7 @@ void setup()
     LOGI("MAIN", "embedded_loudspeaker build %s %s, log level=%d", __DATE__, __TIME__, LOG_LEVEL);
     LOGI("MAIN", "log port: Serial (LOG UART, 2000000 baud), TX = D17 / RX = D16");
 
-    userInfo.age = 25;
+    userInfo.age = settingsLoadAge();  // flash; USER_AGE_DEFAULT when never saved
     userInfo.weight = 70.5;
     userInfo.height = 175.0;
     LOGI("MAIN", "user: age=%d weight=%d height=%d", static_cast<int>(userInfo.age),

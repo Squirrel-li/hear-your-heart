@@ -15,6 +15,7 @@ constexpr uint32_t MOTION_BUCKET_MS = 500;
 constexpr uint8_t MOTION_WINDOW_BUCKETS = 1;
 constexpr uint32_t MOTION_DWELL_MS = 500;
 constexpr uint8_t MOTION_LEVEL_NONE = 0xFF;
+constexpr uint32_t MOTION_STALE_MS = 5000;  // no acc sample this long: level unknown (watch reports 1 Hz)
 
 struct MotionLevelState {
     float bucketSum = 0.0f;

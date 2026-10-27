@@ -42,7 +42,7 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro、`0x05` PPG 原始批次，與hub `BLETask.cpp` 一致）。source：`0` 胸帶（現有 sensor，不另外處理）、`1` 手錶端（保留）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
+| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro、`0x05` PPG 原始批次，與hub `BLETask.cpp` 一致）。source：`0` 綁帶（外部實作，`BLE_sensor_ITAP`）、`1` 手錶（本專案 N76E003，`BLE_watch_ITAP`）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
 | `payload`          | —     | 依 msgType 決定（第 4–6、4.1 節）                             |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
@@ -52,7 +52,7 @@ hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩�
 | `0x00` | cmd 回應            | 3–15B   | 8–20B      | sensor → hub：FFF1（第 6 節）           |
 | `0x01` | PPG                 | 15B     | 20B        | sensor → hub：FFF1                      |
 | `0x02` | Acc+Gyro（LSM6DS3） | 16B     | 21B        | sensor → hub：FFF1（`ble_sensor`、`ble_sensor_hr` 使用，需 MTU ≥ 24） |
-| `0x03` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
+| `0x03` | Acc（LSM6DS3）      | 10B     | 15B        | sensor → hub：FFF1（`ble_sensor_motion`、`ble_sensor_demo`、`ble_sensor_capture` 使用，預設 MTU 即可） |
 | `0x04` | Gyro（LSM6DS3）     | 10B     | 15B        | sensor → hub：FFF1（協定保留，現有韌體不送） |
 | `0x05` | PPG 原始批次        | 5+4N B  | 10+4N B    | sensor → hub：FFF1（`ble_sensor_hr` 每 N=2 筆送一次，18B；第 4.1 節） |
 

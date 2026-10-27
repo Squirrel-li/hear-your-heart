@@ -47,6 +47,7 @@ enum TopItem : uint8_t {
     TopSongs,
     TopStop,
     TopVolume,
+    TopAge,
     TopBpmAnalysis,
     TopSource,
     TopBle,
@@ -68,7 +69,8 @@ enum class Screen : uint8_t {
     SourceList,    // PPG / IMU (OK cycles Chest/Watch/Local) / Back
     BleList,       // per device: link (OK connects / disconnects), mode (OK toggles Auto/Manual); Back
     PowerConfirm,  // Cancel / Power off
-    ClearConfirm   // Cancel / Clear all (BPM and genre results)
+    ClearConfirm,  // Cancel / Clear all (BPM and genre results)
+    AgeEdit        // Up/Down change the age, OK saves it (controlTask writes flash)
 };
 
 constexpr uint8_t MODE_COUNT = 4;  // PlayMode values in order: Enjoy, Train, Manual, Demo
@@ -111,7 +113,7 @@ AudioState audioState = AudioState::Stopped;
 char nowPlaying[AUDIO_FILENAME_MAX] = "";
 // ponytail: Volume is mirrored from menu changes only; the serial "volume" command
 // can make it differ. Have audioTask report the volume if that matters.
-uint8_t volumePercent = 50;  // audioTask starts at 50%
+uint8_t volumePercent = DEFAULT_VOLUME_PERCENT;
 BpmAnalysisState bpmAnalysisState = BpmAnalysisState::Idle;
 BpmAnalysisMode bpmAnalysisMode = BpmAnalysisMode::NewOrUnknown;
 uint16_t bpmAnalysisCurrent = 0;
@@ -126,6 +128,10 @@ int16_t songMenuIndex = -1;     // musicLibrary index shown in SongMenu
 bool songMenuFromList = false;  // SongMenu opened from SongList (has Play, Back returns to the list)
 enum SongMenuItem : uint8_t { SongPlay, SongDouble, SongHalve, SongBack };
 bool powerOffRequested = false;  // set by the confirm screen, handled in the UITask loop
+uint8_t ageEdit = USER_AGE_DEFAULT;  // value shown while AgeEdit is open
+// BpmStatus rows: state, progress, file, Back, and Cancel while a scan is queued or running.
+constexpr uint16_t BPM_STATUS_BACK = 3;
+constexpr uint16_t BPM_STATUS_CANCEL = 4;
 
 // Reported by BLETask, index = SensorSource (Chest, Watch).
 BleLinkState bleLink[2] = {BleLinkState::Down, BleLinkState::Down};
@@ -204,12 +210,17 @@ uint16_t topRowOf(uint8_t item)
     return topItemVisible(item) ? row : 0;
 }
 
-// The library is rewritten only by audioTask while it scans with playback stopped; the
-// list is not offered then. Never returns 0 while the list is open (cursor math needs >= 1).
+// Entries are added or removed only while musicBpmAnalysisBusy (directory scan, clear); the list
+// is not offered then. Never returns 0 while the list is open (cursor math needs >= 1).
 uint16_t songCount()
 {
     const size_t n = musicLibrary.count > MUSIC_LIBRARY_MAX ? MUSIC_LIBRARY_MAX : musicLibrary.count;
     return n == 0 ? 1 : static_cast<uint16_t>(n);
+}
+
+bool bpmAnalysisActive()
+{
+    return bpmAnalysisState == BpmAnalysisState::Queued || bpmAnalysisState == BpmAnalysisState::Running;
 }
 
 uint16_t itemCount()
@@ -219,7 +230,8 @@ uint16_t itemCount()
     case Screen::PlanList: return TRAIN_PLAN_COUNT;
     case Screen::VolumeList: return VOLUME_COUNT;
     case Screen::BpmAnalysisList: return BPM_ANALYSIS_COUNT;
-    case Screen::BpmStatus: return 4;
+    case Screen::BpmStatus: return bpmAnalysisActive() ? BPM_STATUS_CANCEL + 1 : BPM_STATUS_BACK + 1;
+    case Screen::AgeEdit: return 1;
     case Screen::SongList: return songCount();
     case Screen::SongMenu: return songMenuFromList ? 4 : 3;
     case Screen::SourceList: return SOURCE_LIST_COUNT;
@@ -256,6 +268,7 @@ const char* screenName(Screen value)
     case Screen::BleList: return "BleList";
     case Screen::PowerConfirm: return "PowerConfirm";
     case Screen::ClearConfirm: return "ClearConfirm";
+    case Screen::AgeEdit: return "AgeEdit";
     }
     return "?";
 }
@@ -270,6 +283,7 @@ const char* topItemName(uint8_t item)
     case TopSongs: return "Songs";
     case TopStop: return "Stop";
     case TopVolume: return "Volume";
+    case TopAge: return "Age";
     case TopBpmAnalysis: return "BPM analysis";
     case TopSource: return "Source";
     case TopBle: return "BLE";
@@ -298,9 +312,10 @@ void sendBleCommand(BleCommandType type, uint8_t device)
 
 bool sendCommand(UiCommandType type, uint8_t volume = 0, PlayMode mode = PlayMode::Enjoy,
                  int16_t songIndex = -1, SensorSource source = SensorSource::Chest, uint8_t plan = 0,
-                 uint16_t bpm = 0)
+                 uint16_t bpm = 0, uint8_t age = 0)
 {
     UiCommandElement command{};
+    command.age = age;
     command.bpm = bpm;
     command.command = type;
     command.trainPlan = plan;
@@ -354,6 +369,13 @@ void activateItem()
     case Screen::VolumeList:
         backToTop(TopVolume);
         break;
+    case Screen::AgeEdit:
+        if (ageEdit != userInfo.age) {
+            LOGI(TAG, "age %d -> %u requested", userInfo.age, static_cast<unsigned>(ageEdit));
+            sendCommand(UiCommandType::SetAge, 0, PlayMode::Enjoy, -1, SensorSource::Chest, 0, 0, ageEdit);
+        }
+        backToTop(TopAge);
+        break;
     case Screen::BpmAnalysisList: {
         if (cursor == 3) {
             backToTop(TopBpmAnalysis);
@@ -382,13 +404,13 @@ void activateItem()
             bpmAnalysisFailed = 1;
         }
         screen = Screen::BpmStatus;
-        cursor = 0;
+        cursor = BPM_STATUS_BACK;
         menuTop = 0;
         break;
     }
     case Screen::BpmStatus:
-        if (bpmAnalysisState == BpmAnalysisState::Queued ||
-            bpmAnalysisState == BpmAnalysisState::Running) {
+        // Back leaves the scan running in the background; only the Cancel row stops it.
+        if (cursor == BPM_STATUS_CANCEL && bpmAnalysisActive()) {
             sendCommand(UiCommandType::CancelBpmAnalysis);
             bpmAnalysisState = BpmAnalysisState::Cancelled;
         }
@@ -491,12 +513,15 @@ void activateItem()
         case TopVolume:
             openList(Screen::VolumeList, 0);
             break;
+        case TopAge:
+            ageEdit = static_cast<uint8_t>(userInfo.age);
+            openList(Screen::AgeEdit, 0);
+            break;
         case TopBpmAnalysis:
-            if (bpmAnalysisState == BpmAnalysisState::Queued ||
-                bpmAnalysisState == BpmAnalysisState::Running) {
+            if (bpmAnalysisActive()) {
                 LOGD(TAG, "BPM analysis already active; showing status");
                 screen = Screen::BpmStatus;
-                cursor = 0;
+                cursor = BPM_STATUS_BACK;
                 menuTop = 0;
             } else {
                 openList(Screen::BpmAnalysisList, 0);
@@ -603,6 +628,7 @@ void applyUpdate(const UiUpdateElement& update)
             strncpy(bpmAnalysisFile, update.filename, sizeof(bpmAnalysisFile) - 1);
             bpmAnalysisFile[sizeof(bpmAnalysisFile) - 1] = 0;
         }
+        if (screen == Screen::BpmStatus && cursor >= itemCount()) cursor = BPM_STATUS_BACK;  // Cancel row gone
         break;
     default:
         break;
@@ -643,6 +669,10 @@ void itemLabel(uint16_t item, char* out, size_t size)
         return;
     case Screen::ClearConfirm:
         snprintf(out, size, "%s", item == 0 ? "Cancel" : "Clear BPM + genre");
+        return;
+    case Screen::AgeEdit:
+        snprintf(out, size, "Age %u  HRmax %u", static_cast<unsigned>(ageEdit),
+                 static_cast<unsigned>(206.9f - 0.67f * ageEdit + 0.5f));
         return;
     case Screen::SongList:
         if (item >= musicLibrary.count) {
@@ -700,10 +730,11 @@ void itemLabel(uint16_t item, char* out, size_t size)
         case 2:
             snprintf(out, size, "%.21s", bpmAnalysisFile);
             break;
+        case BPM_STATUS_BACK:
+            snprintf(out, size, "Back");
+            break;
         default:
-            snprintf(out, size, "%s",
-                     bpmAnalysisState == BpmAnalysisState::Queued ||
-                     bpmAnalysisState == BpmAnalysisState::Running ? "OK: Cancel" : "OK: Back");
+            snprintf(out, size, "Cancel analysis");
             break;
         }
         return;
@@ -753,6 +784,9 @@ void itemLabel(uint16_t item, char* out, size_t size)
         break;
     case TopVolume:
         snprintf(out, size, "Volume: %u%%", volumePercent);
+        break;
+    case TopAge:
+        snprintf(out, size, "Age: %d", userInfo.age);
         break;
     case TopBpmAnalysis:
         if (bpmAnalysisState == BpmAnalysisState::Queued)
@@ -966,16 +1000,19 @@ void drainUpdates()
     while (uiUpdateQueue != nullptr && xQueueReceive(uiUpdateQueue, &update, 0) == pdPASS) applyUpdate(update);
 }
 
-// Two lobes plus a point: 4r wide, 3r tall, cy is the lobe centre line.
+// Two lobes plus a point: 4r wide, 3r tall, cy is the lobe centre line. The sides from the point
+// (cx, cy + 2r) touch the lobes tangentially at (cx +- 1.6r, cy + 0.8r), so no lobe edge sticks out.
 void drawHeart(int16_t cx, int16_t cy, int16_t r)
 {
     if (r < 1) {
         oled.drawPixel(cx, cy, 1);
         return;
     }
+    const int16_t tx = (8 * r + 2) / 5, ty = cy + (4 * r + 2) / 5;  // rounded: truncating leaves lobe bumps
     oled.fillCircle(cx - r, cy, r, 1);
     oled.fillCircle(cx + r, cy, r, 1);
-    oled.fillTriangle(cx - 2 * r, cy, cx + 2 * r, cy, cx, cy + 2 * r, 1);
+    oled.fillTriangle(cx - tx, ty, cx + tx, ty, cx, cy + 2 * r, 1);
+    oled.fillTriangle(cx - tx, ty, cx, cy, cx + tx, ty, 1);  // fills the notch under where the lobes meet
 }
 
 void drawNote(int16_t x, int16_t y)
@@ -1153,7 +1190,17 @@ void UITask(void* parameter) {
                 sendCommand(UiCommandType::SetVolume, volumePercent);
                 dirty = true;
             }
-        } else if (screen != Screen::BpmStatus) {
+        } else if (screen == Screen::AgeEdit) {
+            if (upPressed && ageEdit < USER_AGE_MAX) ++ageEdit;
+            if (downPressed && ageEdit > USER_AGE_MIN) --ageEdit;
+            dirty = dirty || upPressed || downPressed;
+        } else if (screen == Screen::BpmStatus) {
+            // Only Back and Cancel are selectable; the other rows are status text.
+            if ((upPressed || downPressed) && bpmAnalysisActive()) {
+                cursor = cursor == BPM_STATUS_BACK ? BPM_STATUS_CANCEL : BPM_STATUS_BACK;
+                dirty = true;
+            }
+        } else {
             if (upPressed) {
                 cursor = cursor == 0 ? itemCount() - 1 : cursor - 1;
                 dirty = true;

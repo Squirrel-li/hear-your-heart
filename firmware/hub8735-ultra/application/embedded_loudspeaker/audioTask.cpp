@@ -4,9 +4,17 @@
 #include "music_genre_classifier.h"
 #include "helix_state.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace {
+
+// Loudness is heard in dB, so equal percent steps are equal dB steps: 10..100 % -> -30..0 dB, 0 % = mute.
+// Floor picked by ear on the board speakers: the old linear 5 % (-26 dB) should sit near 20 %.
+float volumeGain(uint8_t percent)
+{
+    return percent == 0 ? 0.0f : powf(10.0f, (static_cast<int>(percent) - 100) / 60.0f);
+}
 
 constexpr const char* TAG = "AUDIO";
 constexpr const char* BPM_TAG = "BPMSCAN";
@@ -395,6 +403,7 @@ void advanceBpmScan()
                  static_cast<unsigned>(bpmScan.count), track.filename, static_cast<unsigned>(bpm),
                  static_cast<unsigned>(entry.bpm), static_cast<unsigned long>(millis() - bpmFileStartMs));
             entry.bpm = bpm;
+            ++musicLibraryRevision;
             entry.fileSize = track.fileSize;
             entry.fileModified = track.fileModified;
             if (!musicLibrarySave(fs, musicLibrary)) {
@@ -486,6 +495,7 @@ void sendPlaybackEvent(AudioPlaybackEventType type, int16_t songIndex)
 // filename is only given when a new file starts; otherwise the UI keeps the last one.
 void reportAudioState(AudioState state, const char* filename = nullptr)
 {
+    audioPlaybackState = state;
     if (uiUpdateQueue == nullptr) return;
     UiUpdateElement update{};
     update.type = UiUpdateType::Audio;
@@ -592,14 +602,13 @@ void handleAudioCommand(AudioCmdElement& command)
     case AudioCommandType::SetVolume: {
         const uint8_t percent =
             command.volumePercent > 100 ? 100 : command.volumePercent;
-        amp.setVolume(percent / 100.0f);
+        amp.setVolume(volumeGain(percent));
         LOGI(TAG, "volume %u%%", static_cast<unsigned>(percent));
         break;
     }
 
     case AudioCommandType::Pause:
-        currentPlaybackAutomatic = false;
-        currentAutomaticSongIndex = -1;
+        // An automatic song stays automatic: after Resume it still reports Finished to controlTask.
         if (amp.pauseMp3()) {
             playbackPaused = true;
             LOGI(TAG, "paused");
@@ -610,8 +619,6 @@ void handleAudioCommand(AudioCmdElement& command)
         break;
 
     case AudioCommandType::Resume:
-        currentPlaybackAutomatic = false;
-        currentAutomaticSongIndex = -1;
         if (amp.resumeMp3()) {
             playbackPaused = false;
             LOGI(TAG, "resumed");
@@ -642,6 +649,7 @@ void handleAudioCommand(AudioCmdElement& command)
         MusicEntry& entry = musicLibrary.entries[index];
         const uint16_t previous = entry.bpm;
         entry.bpm = command.bpm;
+        ++musicLibraryRevision;
         if (musicLibrarySave(fs, musicLibrary)) {
             LOGI(BPM_TAG, "BPM corrected by user: %s %u -> %u", entry.file, static_cast<unsigned>(previous),
                  static_cast<unsigned>(entry.bpm));
@@ -727,11 +735,11 @@ void audioTask(void* parameter)
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     amp.setShutdownPin(AMP_SD_PIN);
-    amp.setVolume(0.5f);
+    amp.setVolume(volumeGain(DEFAULT_VOLUME_PERCENT));
     musicStorageReady = true;
     audioBootProgress = 100;
-    LOGI(TAG, "MAX98357 ready (volume 50%%, shutdown pin D%u); audio storage ready",
-         static_cast<unsigned>(AMP_SD_PIN));
+    LOGI(TAG, "MAX98357 ready (volume %u%%, shutdown pin D%u); audio storage ready",
+         static_cast<unsigned>(DEFAULT_VOLUME_PERCENT), static_cast<unsigned>(AMP_SD_PIN));
 
     for (;;) {
         AudioCmdElement command{};

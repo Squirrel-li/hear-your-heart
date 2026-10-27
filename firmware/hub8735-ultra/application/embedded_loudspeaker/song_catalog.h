@@ -74,6 +74,20 @@ static int songAfterFinish(uint16_t targetBpm, int currentSong,
             ? currentSong
             : closestSong(targetBpm, currentSong, unavailableMask);
 }
+// No song has a BPM yet (first boot, results cleared): any playable song, starting at seed, preferring
+// one other than currentSong. -1 when every song is unavailable.
+static int randomSong(uint32_t seed, int currentSong, const uint32_t* unavailableMask = nullptr)
+{
+    const int count = static_cast<int>(musicLibrary.count);
+    int fallback = -1;
+    for (int step = 0; step < count; ++step) {
+        const int index = static_cast<int>((seed + static_cast<uint32_t>(step)) % static_cast<uint32_t>(count));
+        if (songUnavailable(index, unavailableMask)) continue;
+        if (index != currentSong) return index;
+        fallback = index;
+    }
+    return fallback;
+}
 #ifdef SONG_CATALOG_SELF_TEST
 #include <assert.h>
 MusicLibrary musicLibrary{};
@@ -109,6 +123,12 @@ int main(void)
     const char* unknown = "{\"songs\":[{\"file\":\"unknown.mp3\"}]}";
     assert(music_json::parse(unknown, musicLibrary));
     assert(songForStart(100, -1) == -1);  // Unknown BPM is not selectable.
+    assert(randomSong(7, -1) == 0 && randomSong(0, 0) == 0);  // the only song, even if it is the current one
+    static uint32_t none[SONG_MASK_WORDS];
+    none[0] = 1u;
+    assert(randomSong(3, -1, none) == -1);
+    assert(music_json::parse(json, musicLibrary));
+    assert(randomSong(17, -1) == 1 && randomSong(1, 1) == 2);  // seed wraps; skips the current song
 
     // Library beyond the old 32-song limit; the failure mask must reach high indexes.
     static char big[MUSIC_LIBRARY_JSON_MAX];

@@ -59,6 +59,10 @@ struct UserInfo {
     float HRmax() const {
         return 206.9f - (0.67 * age);
     }
+    uint16_t hrmaxBpm() const {
+        const float h = HRmax();
+        return age > 0 && h > 0.0f ? static_cast<uint16_t>(h + 0.5f) : 0;
+    }
 };
 
 extern UserInfo userInfo;
@@ -183,6 +187,9 @@ enum class AudioCommandType : uint8_t {
     ClearAnalysisResults  // user: drop every song's BPM and genre (cancels a running scan)
 };
 
+// Boot volume; audioTask maps 10..100 % to -30..0 dB (0 % = mute).
+constexpr uint8_t DEFAULT_VOLUME_PERCENT = 30;
+
 struct AudioCmdElement {
     AudioCommandType command;
     uint8_t volumePercent;
@@ -222,6 +229,12 @@ enum class AudioState : uint8_t {
     Playing,
     Paused
 };
+
+// Written only by audioTask (with every Audio UI report); controlTask reads it for Pause / Resume.
+extern volatile AudioState audioPlaybackState;
+// audioTask bumps it whenever a song gets a BPM (scan result, user correction); controlTask retries
+// automatic selection while it only had a random song to play.
+extern volatile uint32_t musicLibraryRevision;
 
 // Sensor: heartRateBpm/spo2/sensorStatus; Ble: bleLink/bleAuto; Acc: acc; Gyro: gyro;
 // Audio: audioState and, when a new file starts, filename; Mode: mode;
@@ -307,7 +320,8 @@ enum class UiCommandType : uint8_t {
     PowerOn,   // leave standby; playback stays stopped
     RestartTrain,  // restart the current Train plan from stage 1
     SetSongBpm,    // songIndex's BPM becomes bpm (user corrects x2 / /2)
-    ClearAnalysisResults  // drop all BPM and genre results
+    ClearAnalysisResults,  // drop all BPM and genre results
+    SetAge         // user age (HRmax); saved to flash
 };
 
 struct UiCommandElement {
@@ -318,7 +332,13 @@ struct UiCommandElement {
     int16_t songIndex;  // PlaySong: musicLibrary index
     SensorSource source;  // SetPpgSource / SetImuSource
     uint16_t bpm;  // SetSongBpm
+    uint8_t age;   // SetAge
 };
+
+// User age range offered by the OLED and accepted by controlTask.
+constexpr uint8_t USER_AGE_MIN = 6;
+constexpr uint8_t USER_AGE_MAX = 99;
+constexpr uint8_t USER_AGE_DEFAULT = 25;
 
 // Log 資料
 enum class LogLevel : uint8_t {

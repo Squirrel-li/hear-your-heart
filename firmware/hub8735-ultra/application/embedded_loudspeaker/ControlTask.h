@@ -11,4 +11,7 @@
 
 void controlTask(void* parameter);
 
+// User age (HRmax) kept in flash; controlTask owns it. setup() reads it before the tasks start.
+int settingsLoadAge();
+
 #endif // CONTROL_TASK_H
