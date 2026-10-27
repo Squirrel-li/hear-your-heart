@@ -8,9 +8,9 @@
 | --- | --- | --- |
 | HUB8735 Ultra | 接收資料、心率／運動分析、曲庫分析、選曲、播放、操作介面 | 本專案 |
 | 穿戴－手錶，N76E003 | BMH08002-4 PPG、LSM6DS3 IMU、心率、OLED／按鍵；經 BM7701 傳送 BLE | 本專案，`ble_sensor`、`ble_sensor_hr`、`ble_sensor_motion`、`ble_sensor_demo` 四個變體都是手錶 |
-| 穿戴－綁帶 | 提供外部感測資料 | 其他人實作；本專案保留 HUB 接收與整合，不指定其內部硬體／演算法 |
+| 穿戴－綁帶 | 提供感測資料 | ----- |
 
-N76E003 是手錶 MCU，BM7701 是其 BLE 模組。程式中的 Chest／BLE_sensor_ITAP 表示外部綁帶來源，不表示此倉庫維護綁帶韌體。舊 ePy Lite／MAX30103 方案不是本專案交付承諾。
+N76E003 是手錶 MCU，BM7701 是其 BLE 模組。程式中的 Chest／BLE_sensor_ITAP 表示綁帶來源，-----。舊 ePy Lite／MAX30103 方案不是本專案交付承諾。
 
 `apps/remote_sensor_simulator` 為可扮演 Watch／Chest 的測試工具，不是第四種產品裝置；`apps/phone` 不納入。TFT 觸控 UI 位於 examples，正式主程式是 SH1106 OLED。`ble_sensor_capture`（`BLE_capture_ITAP`，HUB 不自動連線）與 `apps/bmh08002_ppg_analyzer` 是心率演算法的擷取／回放驗證工具；`ble_sensor_keil` 是舊副本，不在範圍內。
 
@@ -51,7 +51,7 @@ N76E003 是手錶 MCU，BM7701 是其 BLE 模組。程式中的 Chest／BLE_sens
 - **Enjoy**（開機與喚醒的預設）：有效心率 → 穩定 Zone → 目標 BPM → 選曲。Zone 對應依專題規劃書：Z1 放鬆 60–80、Z2 心率、Z3 心率＋5%、Z4 心率－20%、Z5 心率－30%（進入 Z5 不等駐留）。有效樣本為 status=2、HR 非零，最多保留 15 秒；換 Zone 需跨界 2% HRmax 並維持 10 秒。目標每秒更新，上升最多 5 BPM、下降立即。未取得有效心率時等待；失效後保留最後目標；待機清除目標。
 - **Train**：內建 11 分與 5 分課表，順序 Z2 → Z4 → Z2 → Z5 → Z1。依段落 Zone 中點心率選曲，不依實際心率，也不套用 Enjoy 的降速；換段立即選歌。暫停凍結進度，Resume 接續；停止／手動選歌後再選同課表可續接，完成後停止。
 - **Manual**：手動選歌、播放／暫停／恢復／停止；未分析 BPM 的歌也能手動播放。
-- **Demo**：動態加速度分 0–4 級，新等級持續約 0.5 秒後切換 `/demo/DEMO_nn.mp3`；IMU 5 秒無資料時強度未知，播完不重播。這些歌曲不加入一般曲庫與分析。本地 IMU 每 80 ms 讀取，手錶每秒上報；不推定外部綁帶頻率。
+- **Demo**：動態加速度分 0–4 級，新等級持續約 0.5 秒後切換 `/demo/DEMO_nn.mp3`；IMU 5 秒無資料時強度未知，播完不重播。這些歌曲不加入一般曲庫與分析。本地 IMU 每 80 ms 讀取，手錶每秒上報；綁帶-----。
 - **暫停**：自動模式按 Pause 仍維持原模式；暫停中不換歌、DEMO 不切換、課表凍結，Resume 後執行累積的換歌。Stop 或手動選歌才轉 Manual。
 - **曲庫／分析**：從 SD 的 music_library.json 載入，最多 1024 首。開機自動跑「新檔／未知」掃描（需要曲風時於開機畫面載入 NPU 模型）；使用者可另選新檔／未知、全部重分析或清除全部結果。分析與播放同時進行、播放優先。依序跑 BPM（`bpm_tempo.h`）及 SDK YAMNet 曲風分析，結果存入曲庫；使用者可在曲庫清單或播放中把單曲 BPM x2／/2 修正（掃描中也可），「全部重分析」會覆蓋修正。寫入採 tmp／bak 換檔與備份回復。
 - **選曲**：有有效 BPM 即可參與自動選曲，曲風失敗不阻擋，目前只比較 BPM。首次／換 Zone 找目標 ±5% 內曲目，沒有則取最近；自然播畢無符合者可重播原曲。沒有任何歌有 BPM 時隨機播一首，有歌取得 BPM 後替換。失敗曲目跳過，全部不可用則停止。
@@ -68,7 +68,7 @@ HUB 依名稱辨識 BLE_watch_ITAP／BLE_sensor_ITAP，先探索 FFF0／FFF1 not
 
 Frame 為 `sensor_time_ms 4B | msgType 1B | sequence 4B | fields`，多位元組 Big-endian。msgType 高 4 bit 是來源（0=Chest、1=Watch），低 4 bit 是類型：01 PPG 20B、02 ACC+GYRO 21B、03 ACC 15B、04 GYRO 15B、05 PPG 原始批次 10+4N B；00 保留且忽略。手錶實際送出的類型位元組為 0x11／0x12，`ble_sensor_hr` 另送 0x15（N=2，18B），`ble_sensor_motion` 送 0x11／0x13。
 
-21B 通知要求 ATT MTU 至少 24；其他 central 曾收到 BM7701 的 25B 通知，不足以證明 HUB 與外部綁帶的端到端相容性。綁帶內部實作不在範圍內，其名稱、來源碼、資料格式與連線行為仍需整合驗證。
+21B 通知要求 ATT MTU 至少 24；其他 central 曾收到 BM7701 的 25B 通知，不足以證明 HUB 與綁帶的端到端相容性。綁帶-----，其名稱、來源碼、資料格式與連線行為仍需整合驗證。
 
 ## 已知落差
 
@@ -84,4 +84,4 @@ Frame 為 `sensor_time_ms 4B | msgType 1B | sequence 4B | fields`，多位元組
 | 期望曲風 | 曲風已儲存；選項與曲風選曲尚未接入 |
 | 歷史文件 | BLE 快速參考、早期感測計畫、架構圖 prompt、DFD 舊版與 ePy Lite 資料含舊假設，不能直接當成現行契約 |
 
-硬體驗證需另有證據：雙 BLE 長時間連線與 MTU、外部綁帶相容性、四個手錶變體的心率／記憶體與重燒結果、NPU 模型載入／記憶體／分類品質、播放與待機喚醒。編譯或主機自測不能代替這些驗收。
+硬體驗證需另有證據：雙 BLE 長時間連線與 MTU、綁帶相容性、四個手錶變體的心率／記憶體與重燒結果、NPU 模型載入／記憶體／分類品質、播放與待機喚醒。編譯或主機自測不能代替這些驗收。

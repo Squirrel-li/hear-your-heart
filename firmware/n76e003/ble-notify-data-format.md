@@ -1,6 +1,6 @@
 # BLE 通訊協定（sensor ↔ hub8735）
 
-> 2026-10-18 核對：以下保留協定細節，部分連線描述未同步：ble_sensor 與 ble_sensor_hr 都是手錶，廣播 BLE_watch_ITAP、source=1；BLE_sensor_ITAP 是外部綁帶。HUB 有雙服務探索及各連線 Auto／Manual，不應依舊描述假定只有單一裝置或永遠自動重連。 現況見[架構核對](../../docs/ARCHITECTURE.md)。
+> 2026-10-18 核對：以下保留協定細節，部分連線描述未同步：ble_sensor 與 ble_sensor_hr 都是手錶，廣播 BLE_watch_ITAP、source=1；BLE_sensor_ITAP 是綁帶。HUB 有雙服務探索及各連線 Auto／Manual，不應依舊描述假定只有單一裝置或永遠自動重連。 現況見[架構核對](../../docs/ARCHITECTURE.md)。
 
 對照：`hub8735-ultra/application/embedded_loudspeaker/BLETask.{h,cpp}`、`globalData.h`、`n76e003/application/ble_sensor/source/main.c`
 更新：2026-10-11
@@ -42,7 +42,7 @@ UUID 雖已事先約定，hub 仍須做服務探索來取得 handle，並寫入 
 | 欄位                 | 型別   | 說明                                                         |
 | -------------------- | ------ | ------------------------------------------------------------ |
 | `sensor_time_ms` | uint32 | sensor 時鐘，資料產生（取樣）時刻，不是送出時刻；1 ms，約 49.7 天歸零，長時間會漂移 |
-| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro、`0x05` PPG 原始批次，與hub `BLETask.cpp` 一致）。source：`0` 綁帶（外部實作，`BLE_sensor_ITAP`）、`1` 手錶（本專案 N76E003，`BLE_watch_ITAP`）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
+| `msgType`         | uint8  | 高 4 bit = source，低 4 bit = 類型（`0x00` cmd、`0x01` PPG、`0x02` Acc+Gyro、`0x03` Acc、`0x04` Gyro、`0x05` PPG 原始批次，與hub `BLETask.cpp` 一致）。source：`0` 綁帶（-----，`BLE_sensor_ITAP`）、`1` 手錶（本專案 N76E003，`BLE_watch_ITAP`）；`2` 為 Hub 本地直接接的 BMH08002-4 + LSM6DS3，不經 BLE，不會出現在 frame 裡 |
 | `payload`          | —     | 依 msgType 決定（第 4–6、4.1 節）                             |
 
 hub 收到時另記 `hub_rx_time_ms`（hub 時鐘，不在空中傳送）。兩者來自不同時鐘，不能直接相減；對時以 `hub_rx_time_ms` 校正。
