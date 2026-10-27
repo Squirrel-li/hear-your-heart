@@ -2,7 +2,7 @@
 
 系統分為三種裝置：**HUB8735 Ultra 運算播放端、N76E003 穿戴手錶、外部穿戴綁帶**。本專案實作 HUB 與手錶；綁帶由其他人實作，本專案保留 HUB 接收與整合。BM7701 是手錶的 BLE 傳輸模組。
 
-目前 HUB 提供 Enjoy 心率選曲、Train 課表、Manual 手動播放、Demo 運動強度播放，以及 OLED 操作、雙 BLE 連線、曲庫分析與軟體待機。主程式已接入 BPM／NPU 曲風分析，曲風存入 JSON；有有效 BPM 即可自動選曲。未來可新增使用者的「期望曲風」選項。自動偵測新檔與播放中延後分析尚未完成。手錶的 `ble_sensor`／`ble_sensor_hr` 分別使用模組心率／自行計算心率，兩者都不是綁帶韌體。
+目前 HUB 提供 Enjoy 心率選曲（各 Zone 依專題規劃書對應歌曲 BPM，開機與喚醒預設）、Train 課表、Manual 手動播放、Demo 運動強度播放，以及 OLED 操作（含年齡設定，存於 HUB 內部 Flash）、雙 BLE 連線、曲庫分析與軟體待機。暫停不離開自動模式。主程式已接入 BPM／NPU 曲風分析，開機自動分析新檔，並可與播放同時進行（播放優先）；曲風存入 JSON，有有效 BPM 即可自動選曲，曲庫尚無 BPM 時先隨機播放。未來可新增使用者的「期望曲風」選項。手錶的 `ble_sensor`／`ble_sensor_hr`／`ble_sensor_motion` 分別使用模組心率／自行計算心率／抗運動心率（試驗中），`ble_sensor_demo` 可播放預錄 PPG 供展示，皆不是綁帶韌體。
 
 `apps/remote_sensor_simulator` 是可模擬手錶／綁帶的測試工具；產品手機 App 不在範圍內。需求與責任邊界見 [AGENTS.md](AGENTS.md)，目前功能、資料流及文件衝突見 [架構核對](docs/ARCHITECTURE.md)。程式存在不代表已通過實機驗收。
 

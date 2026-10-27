@@ -14,7 +14,7 @@ Desktop.ini
 
 # Editors and IDEs
 .idea/
-.vscode/*.user
+.vscode/
 *.iml
 *.ipr
 *.iws
