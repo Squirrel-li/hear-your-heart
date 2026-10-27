@@ -38,4 +38,8 @@ hear-your-heart/
 - [HUB接腳](firmware/hub8735-ultra/pinset.md)：HUB8735 Ultra的接線
 - SD卡內容：repo只附曲風模型`firmware/hub8735-ultra/sd_card/NN_MDL/yamnet.nb`；歌曲與DEMO音樂因授權不隨repo散布，請自行放入SD卡（DEMO曲目路徑見[DEMO模式](docs/hub8735/DEMO_MODE.md)）
 
+## 授權
+
+本專案以[Apache License 2.0](LICENSE)授權，散布時須保留[NOTICE](NOTICE)。子模組與第三方元件依各自授權。
+
 > 僅供專題研究與展示，不提供醫療診斷。
