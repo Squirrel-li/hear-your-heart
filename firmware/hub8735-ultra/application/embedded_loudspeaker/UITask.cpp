@@ -23,6 +23,8 @@ constexpr uint8_t PIN_BATTERY = 2;  // ADC0, battery through a /2 divider
 
 constexpr uint32_t POLL_MS = 10;
 constexpr uint32_t REDRAW_MS = 50;
+constexpr uint32_t MARQUEE_MS = 300;  // a long name scrolls one column per step
+constexpr int MARQUEE_GAP = 3;        // blank columns between the end and the restart of a scrolled name
 // Full resend (and placement registers) so a glitched I2C transfer heals by itself.
 constexpr uint32_t REFRESH_MS = 2000;
 
@@ -674,6 +676,37 @@ void applyUpdate(const UiUpdateElement& update)
         break;
     }
 }
+
+bool marqueeActive = false;  // set while drawing when a name scrolls; the loop then redraws every MARQUEE_MS
+
+// Writes text into out as exactly width columns (out needs width + 1 bytes): padded when it fits,
+// otherwise cut with '~', or, when scroll, a window that moves left and wraps around after a gap.
+void fitText(char* out, const char* text, int width, bool scroll)
+{
+    if (width <= 0) {
+        out[0] = 0;
+        return;
+    }
+    const int len = static_cast<int>(strlen(text));
+    if (len <= width) {
+        snprintf(out, width + 1, "%-*s", width, text);
+        return;
+    }
+    if (!scroll) {
+        memcpy(out, text, width - 1);
+        out[width - 1] = '~';
+    } else {
+        marqueeActive = true;
+        const int span = len + MARQUEE_GAP;
+        const int start = static_cast<int>(millis() / MARQUEE_MS % span);
+        for (int c = 0; c < width; ++c) {
+            const int p = (start + c) % span;
+            out[c] = p < len ? text[p] : ' ';
+        }
+    }
+    out[width] = 0;
+}
+
 void itemLabel(uint16_t item, char* out, size_t size)
 {
     switch (screen) {
@@ -729,12 +762,14 @@ void itemLabel(uint16_t item, char* out, size_t size)
         if (item >= musicLibrary.count) {
             snprintf(out, size, "(no songs)");
         } else {
-            // "001.mp3     136 Ele": 11-char name, BPM, first 3 letters of the genre ("--" when unknown);
-            // 19 columns leave the scroll hint at column 20 clear.
+            // "001.mp3     136 Ele": 11-column name (cut with '~', the cursor row scrolls), BPM, first 3
+            // letters of the genre ("--" when unknown); 19 columns leave the scroll hint at column 20 clear.
             const MusicEntry& e = musicLibrary.entries[item];
+            char name[12];
+            fitText(name, e.file, 11, item == cursor);
             char bpmText[8] = "--";
             if (e.bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", static_cast<unsigned>(e.bpm));
-            snprintf(out, size, "%-11.11s %3s %.3s", e.file, bpmText, e.genre[0] ? e.genre : "--");
+            snprintf(out, size, "%s %3s %.3s", name, bpmText, e.genre[0] ? e.genre : "--");
         }
         return;
     case Screen::SongMenu: {
@@ -954,7 +989,8 @@ void drawHeader(char* line, size_t size)
     }
     const int statusLen = static_cast<int>(strlen(status));
     const int nameMax = OledSh1106::WIDTH / 6 - statusLen - 1;  // one blank column before the status
-    snprintf(line, size, "%.*s", nameMax, audioState == AudioState::Stopped ? "Stopped" : nowPlaying);
+    fitText(line, audioState == AudioState::Stopped ? "Stopped" : nowPlaying,
+            nameMax < static_cast<int>(size) ? nameMax : static_cast<int>(size) - 1, true);
     oled.setCursor(0, SONG_Y);
     oled.print(line);
     oled.setCursor(OledSh1106::WIDTH - 6 * statusLen, SONG_Y);
@@ -973,6 +1009,7 @@ void draw()
 
     oled.clearDisplay();
     oled.setTextSize(1);
+    marqueeActive = false;
     const bool volumeBar = screen == Screen::VolumeList;
     oled.setTextColor(1);
     drawHeader(line, sizeof(line));
@@ -1218,6 +1255,7 @@ void UITask(void* parameter) {
         LOGE(TAG, "OLED (SH1106 @0x%02X) not found on Wire (D3/D4); UI disabled, task exits", OLED_ADDRESS);
         vTaskDelete(nullptr);
     }
+    oled.setTextWrap(false);  // a too-long line is clipped at the right edge instead of spilling into the next row
     LOGI(TAG, "OLED initialized (128x64, refresh %lu ms)", static_cast<unsigned long>(REFRESH_MS));
     playBootAnimation();
 
@@ -1281,6 +1319,7 @@ void UITask(void* parameter) {
 
         const uint32_t now = millis();
         if ((uint32_t)(now - lastRefreshMs) >= REFRESH_MS) dirty = true;
+        if (marqueeActive && (uint32_t)(now - lastDrawMs) >= MARQUEE_MS) dirty = true;
         const uint32_t sec = clockSeconds();
         if (sec != lastClockSec) {
             lastClockSec = sec;
