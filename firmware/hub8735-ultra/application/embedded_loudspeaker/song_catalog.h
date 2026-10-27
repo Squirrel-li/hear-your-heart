@@ -22,13 +22,20 @@ static bool songUnavailable(int index, const uint32_t* unavailableMask)
            (unavailableMask[index / 32] & (1u << (index % 32))) != 0;
 }
 
+// genre: nullptr = any genre, otherwise only songs whose genre equals it.
+static bool songSelectable(int index, const uint32_t* unavailableMask, const char* genre)
+{
+    return !songUnavailable(index, unavailableMask) && musicLibrary.entries[index].bpm != 0 &&
+           (genre == nullptr || strcmp(musicLibrary.entries[index].genre, genre) == 0);
+}
+
 static int nextMatchingSong(uint16_t targetBpm, int currentSong,
-                            const uint32_t* unavailableMask = nullptr)
+                            const uint32_t* unavailableMask = nullptr, const char* genre = nullptr)
 {
     if (targetBpm == 0 || musicLibrary.count == 0) return -1;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
         const int index = (currentSong + step) % static_cast<int>(musicLibrary.count);
-        if (songUnavailable(index, unavailableMask) || musicLibrary.entries[index].bpm == 0) continue;
+        if (!songSelectable(index, unavailableMask, genre)) continue;
         if (bpmDistance(musicLibrary.entries[index].bpm, targetBpm) * 100u <=
             (uint32_t)targetBpm * 5u) return index;
     }
@@ -36,7 +43,7 @@ static int nextMatchingSong(uint16_t targetBpm, int currentSong,
 }
 
 static int closestSong(uint16_t targetBpm, int currentSong,
-                        const uint32_t* unavailableMask = nullptr)
+                        const uint32_t* unavailableMask = nullptr, const char* genre = nullptr)
 {
     if (targetBpm == 0 || musicLibrary.count == 0) return -1;
     // ponytail: Linear scan; fine for MUSIC_LIBRARY_MAX songs once per selection.
@@ -44,7 +51,7 @@ static int closestSong(uint16_t targetBpm, int currentSong,
     uint32_t bestDistance = UINT32_MAX;
     for (int step = 1; step <= static_cast<int>(musicLibrary.count); ++step) {
         const int index = (currentSong + step) % static_cast<int>(musicLibrary.count);
-        if (songUnavailable(index, unavailableMask) || musicLibrary.entries[index].bpm == 0) continue;
+        if (!songSelectable(index, unavailableMask, genre)) continue;
         const uint32_t distance = bpmDistance(musicLibrary.entries[index].bpm, targetBpm);
         if (distance < bestDistance) {
             best = index;
@@ -54,25 +61,26 @@ static int closestSong(uint16_t targetBpm, int currentSong,
     return best;
 }
 
+// A preferred genre picks the closest BPM within that genre; only when the genre has no selectable song
+// does the whole library count (user decision 2026-10-27).
 static int songForStart(uint16_t targetBpm, int currentSong,
-                         const uint32_t* unavailableMask = nullptr)
+                         const uint32_t* unavailableMask = nullptr, const char* genre = nullptr)
 {
-    const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask);
-    return matching >= 0 ? matching : closestSong(targetBpm, currentSong, unavailableMask);
+    const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask, genre);
+    if (matching >= 0) return matching;
+    const int closest = closestSong(targetBpm, currentSong, unavailableMask, genre);
+    return closest >= 0 || genre == nullptr ? closest : songForStart(targetBpm, currentSong, unavailableMask);
 }
 
 static int songAfterFinish(uint16_t targetBpm, int currentSong,
-                            const uint32_t* unavailableMask = nullptr)
+                            const uint32_t* unavailableMask = nullptr, const char* genre = nullptr)
 {
-    const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask);
-    return matching >= 0
-        ? matching
-        : currentSong >= 0 &&
-          currentSong < static_cast<int>(musicLibrary.count) &&
-          musicLibrary.entries[currentSong].bpm != 0 &&
-          !songUnavailable(currentSong, unavailableMask)
-            ? currentSong
-            : closestSong(targetBpm, currentSong, unavailableMask);
+    const int matching = nextMatchingSong(targetBpm, currentSong, unavailableMask, genre);
+    if (matching >= 0) return matching;
+    if (currentSong >= 0 && currentSong < static_cast<int>(musicLibrary.count) &&
+        songSelectable(currentSong, unavailableMask, genre)) return currentSong;
+    const int closest = closestSong(targetBpm, currentSong, unavailableMask, genre);
+    return closest >= 0 || genre == nullptr ? closest : songAfterFinish(targetBpm, currentSong, unavailableMask);
 }
 // No song has a BPM yet (first boot, results cleared): any playable song, starting at seed, preferring
 // one other than currentSong. -1 when every song is unavailable.
@@ -129,6 +137,19 @@ int main(void)
     assert(randomSong(3, -1, none) == -1);
     assert(music_json::parse(json, musicLibrary));
     assert(randomSong(17, -1) == 1 && randomSong(1, 1) == 2);  // seed wraps; skips the current song
+
+    // Preferred genre: closest BPM inside the genre, whole library only when the genre has nothing.
+    strcpy(musicLibrary.entries[2].genre, "Rock");   // 100 BPM
+    strcpy(musicLibrary.entries[14].genre, "Rock");  // 160 BPM
+    assert(songForStart(135, -1, nullptr, "Rock") == 14);
+    assert(songForStart(103, -1, nullptr, "Rock") == 2);
+    assert(songAfterFinish(135, 2, nullptr, "Rock") == 2);  // no match: keep the current genre song, as without a genre
+    assert(songAfterFinish(160, 14, nullptr, "Rock") == 14);  // only one match: repeat it
+    assert(songForStart(135, -1, nullptr, "Classical") == 0);  // no Classical song: any genre
+    static uint32_t rockFailed[SONG_MASK_WORDS];
+    rockFailed[0] = (1u << 2) | (1u << 14);
+    assert(songForStart(135, -1, rockFailed, "Rock") == 0);  // every Rock song unplayable: any genre
+    assert(songAfterFinish(135, 0, rockFailed, "Rock") == 10);
 
     // Library beyond the old 32-song limit; the failure mask must reach high indexes.
     static char big[MUSIC_LIBRARY_JSON_MAX];

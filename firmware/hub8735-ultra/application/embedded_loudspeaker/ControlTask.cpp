@@ -30,6 +30,7 @@ bool demoPending = false;
 bool userPaused = false;
 // The automatic song was picked at random because no song had a BPM yet; replaced once one has.
 bool randomFill = false;
+uint8_t preferredGenre = 0;  // GENRE_CHOICES index, 0 = Any; not saved, kept across standby
 uint32_t seenLibraryRevision = 0;
 bool settingsSaveAge(uint8_t age);
 // DEMO playback uses songIndex DEMO_SONG_BASE - level so its events never match a library index.
@@ -81,6 +82,7 @@ const char* uiCommandName(UiCommandType type)
     case UiCommandType::SetSongBpm: return "SetSongBpm";
     case UiCommandType::ClearAnalysisResults: return "ClearAnalysisResults";
     case UiCommandType::SetAge: return "SetAge";
+    case UiCommandType::SetGenre: return "SetGenre";
     }
     return "?";
 }
@@ -214,9 +216,10 @@ void selectSongForTarget(bool afterFinish)
         return;
     }
 
+    const char* genre = preferredGenre == 0 ? nullptr : GENRE_CHOICES[preferredGenre];
     int selected = afterFinish
-        ? songAfterFinish(wantBpm, currentSong, failedSongMask)
-        : songForStart(wantBpm, currentSong, failedSongMask);
+        ? songAfterFinish(wantBpm, currentSong, failedSongMask, genre)
+        : songForStart(wantBpm, currentSong, failedSongMask, genre);
     {
         unsigned withBpm = 0, excluded = 0, matching = 0;
         for (size_t i = 0; i < musicLibrary.count; ++i) {
@@ -225,8 +228,9 @@ void selectSongForTarget(bool afterFinish)
             if (songUnavailable(static_cast<int>(i), failedSongMask)) { ++excluded; continue; }
             if (bpmDistance(musicLibrary.entries[i].bpm, wantBpm) * 100u <= static_cast<uint32_t>(wantBpm) * 5u) ++matching;
         }
-        LOGD(TAG, "select (%s): target=%u current=%d songs=%u withBpm=%u failed-excluded=%u within5%%=%u -> %d",
-             afterFinish ? "after finish" : "start/zone change", static_cast<unsigned>(wantBpm), currentSong,
+        LOGD(TAG, "select (%s): target=%u genre=%s current=%d songs=%u withBpm=%u failed-excluded=%u within5%%=%u -> %d",
+             afterFinish ? "after finish" : "start/zone change", static_cast<unsigned>(wantBpm),
+             GENRE_CHOICES[preferredGenre], currentSong,
              static_cast<unsigned>(musicLibrary.count), withBpm, excluded, matching, selected);
     }
     // No song has a BPM yet: play a random one now; a song that gets a BPM replaces it (controlTask loop).
@@ -775,6 +779,14 @@ void handleUiCommand(const UiCommandElement& cmd)
             LOGE(TAG, "age %u applied but not saved to flash", static_cast<unsigned>(cmd.age));
         }
         break;
+    case UiCommandType::SetGenre:
+        if (cmd.genre >= GENRE_CHOICE_COUNT) {
+            LOGW(TAG, "SetGenre ignored: %u", static_cast<unsigned>(cmd.genre));
+            break;
+        }
+        preferredGenre = cmd.genre;  // the current song keeps playing; the next selection uses it
+        LOGI(TAG, "preferred genre: %s", GENRE_CHOICES[preferredGenre]);
+        break;
     }
 }
 const char* sourceLabel(SensorSource source)
@@ -961,6 +973,7 @@ void controlTask(void* parameter)
         UiCommandElement uiCommand{};
         while (uiCmdQueue != nullptr &&
                xQueueReceive(uiCmdQueue, &uiCommand, 0) == pdPASS) {
+            LOGI(TAG, "OKT 2 control got %s", uiCommandName(uiCommand.command));
             handleUiCommand(uiCommand);
         }
 

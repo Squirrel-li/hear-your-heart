@@ -10,6 +10,9 @@ constexpr const char* MUSIC_LIBRARY_FILE = "music_library.json";
 constexpr size_t MUSIC_LIBRARY_MAX = 1024;
 constexpr size_t MUSIC_FILE_MAX = 32;
 constexpr size_t MUSIC_GENRE_MAX = 16;
+// Preferred genre for Enjoy / Train (OLED); 0 = Any. Names must match MusicGenreClassifier's GENRE_LABELS.
+constexpr uint8_t GENRE_CHOICE_COUNT = 6;
+constexpr const char* GENRE_CHOICES[GENRE_CHOICE_COUNT] = {"Any", "Classical", "Electronic", "Hip-Hop", "Rock", "Other"};
 // A formatted entry is at most ~120 bytes; 160 leaves room for hand-edited whitespace.
 constexpr size_t MUSIC_LIBRARY_JSON_MAX = MUSIC_LIBRARY_MAX * 160 + 64;
 

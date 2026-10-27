@@ -187,7 +187,7 @@ enum class AudioCommandType : uint8_t {
     ClearAnalysisResults  // user: drop every song's BPM and genre (cancels a running scan)
 };
 
-// Boot volume; audioTask maps 10..100 % to -30..0 dB (0 % = mute).
+// Boot volume; audioTask maps 10..100 % to -16.7..0 dB (0 % = mute).
 constexpr uint8_t DEFAULT_VOLUME_PERCENT = 30;
 
 struct AudioCmdElement {
@@ -321,7 +321,8 @@ enum class UiCommandType : uint8_t {
     RestartTrain,  // restart the current Train plan from stage 1
     SetSongBpm,    // songIndex's BPM becomes bpm (user corrects x2 / /2)
     ClearAnalysisResults,  // drop all BPM and genre results
-    SetAge         // user age (HRmax); saved to flash
+    SetAge,        // user age (HRmax); saved to flash
+    SetGenre       // preferred genre for Enjoy / Train, index into GENRE_CHOICES; RAM only, next selection
 };
 
 struct UiCommandElement {
@@ -333,6 +334,7 @@ struct UiCommandElement {
     SensorSource source;  // SetPpgSource / SetImuSource
     uint16_t bpm;  // SetSongBpm
     uint8_t age;   // SetAge
+    uint8_t genre; // SetGenre
 };
 
 // User age range offered by the OLED and accepted by controlTask.
