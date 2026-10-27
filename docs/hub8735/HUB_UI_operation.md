@@ -45,7 +45,7 @@
 
 ## 其他主選單項目
 
-- `Songs`（僅Manual模式）：曲庫清單，選歌後可播放或修正BPM。手動播放會轉為Manual。
+- `Songs`（僅Manual模式）：曲庫清單，每列為檔名（前11字）、BPM、曲風前3字母（例如`001.mp3     136 Ele`，未分析顯示`--`），選歌後可播放或修正BPM。手動播放會轉為Manual。
 - `Rescan BPM`：單一按鍵，按OK重新掃描SD並分析新檔／未知BPM或曲風的歌曲，接著顯示進度頁。分析中標籤顯示`BPM: n / total`，再按OK開進度頁，進度頁只看進度，`Back`回主選單（分析在背景繼續）；OLED不提供取消，取消用序列埠`bpm cancel`或關機待機。全部重分析與清除全部結果在`Debug` → `Analysis`。
 - `BLE`：`Watch`／`Chest`兩列，顯示`Conn`（已連線）、`Scan`（搜尋中）、`Auto`（等下次重試）、`Off`（不連）；OK在Auto與Off之間切換。HUB依名稱連第一個找到的裝置，同一空間只使用一套。單次手動連線只保留序列埠`ble connect`。
 - `Input: Watch`：OK依序切換Watch → Chest → Local（PPG與IMU一起換）→ Custom → Watch…。切到Custom時開啟子選單，`PPG`、`IMU`各自切換Chest／Watch／Local，`Back`回主選單。開機預設PPG=Watch、IMU=Local，顯示為Custom。

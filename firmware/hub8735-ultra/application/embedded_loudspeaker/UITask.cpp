@@ -728,11 +728,13 @@ void itemLabel(uint16_t item, char* out, size_t size)
     case Screen::SongList:
         if (item >= musicLibrary.count) {
             snprintf(out, size, "(no songs)");
-        } else if (musicLibrary.entries[item].bpm == 0) {
-            snprintf(out, size, "%.15s --", musicLibrary.entries[item].file);
         } else {
-            snprintf(out, size, "%.15s %u", musicLibrary.entries[item].file,
-                     static_cast<unsigned>(musicLibrary.entries[item].bpm));
+            // "001.mp3     136 Ele": 11-char name, BPM, first 3 letters of the genre ("--" when unknown);
+            // 19 columns leave the scroll hint at column 20 clear.
+            const MusicEntry& e = musicLibrary.entries[item];
+            char bpmText[8] = "--";
+            if (e.bpm != 0) snprintf(bpmText, sizeof(bpmText), "%u", static_cast<unsigned>(e.bpm));
+            snprintf(out, size, "%-11.11s %3s %.3s", e.file, bpmText, e.genre[0] ? e.genre : "--");
         }
         return;
     case Screen::SongMenu: {
