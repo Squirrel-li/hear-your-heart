@@ -1,41 +1,41 @@
 # 聽見你的心（Hear Your Heart）
 
-系統分為三種裝置：**HUB8735 Ultra 運算播放端、N76E003 穿戴手錶、外部穿戴綁帶**。本專案實作 HUB 與手錶；綁帶由其他人實作，本專案保留 HUB 接收與整合。BM7701 是手錶的 BLE 傳輸模組。
+依穿戴裝置量到的心率與動作，即時挑選節奏相符的音樂播放。
 
-目前 HUB 提供 Enjoy 心率選曲（各 Zone 依專題規劃書對應歌曲 BPM，開機與喚醒預設）、Train 課表、Manual 手動播放、Demo 運動強度播放，以及 OLED 操作（含年齡設定，存於 HUB 內部 Flash）、雙 BLE 連線、曲庫分析與軟體待機。暫停不離開自動模式。主程式已接入 BPM／NPU 曲風分析，開機自動分析新檔，並可與播放同時進行（播放優先）；曲風存入 JSON，有有效 BPM 即可自動選曲，曲庫尚無 BPM 時先隨機播放。未來可新增使用者的「期望曲風」選項。手錶的 `ble_sensor`／`ble_sensor_hr`／`ble_sensor_motion` 分別使用模組心率／自行計算心率／抗運動心率（試驗中），`ble_sensor_demo` 可播放預錄 PPG 供展示，皆不是綁帶韌體。
+- **HUB8735 Ultra**：接收感測資料、分析曲庫BPM與曲風、依心率選歌播放，以OLED與按鍵操作。
+- **手錶（N76E003＋BM7701）**：量測PPG心率與IMU動作，經BLE傳給HUB。
+- **綁帶**：由其他人實作的外部感測器，本專案只有HUB接收端。
 
-`apps/remote_sensor_simulator` 是可模擬手錶／綁帶的測試工具；產品手機 App 不在範圍內。需求與責任邊界見 [AGENTS.md](AGENTS.md)，目前功能、資料流及文件衝突見 [架構核對](docs/ARCHITECTURE.md)。程式存在不代表已通過實機驗收。
-
-## 專案檔案結構
+## 專案結構
 
 ```text
 hear-your-heart/
-├── .agents/                     # 專案記憶
-├── apps/
-│   ├── phone/                   # Flutter App，目前不在產品範圍
-│   └── remote_sensor_simulator/ # 感測器測試工具
-├── assets/
-│   ├── hardware/                # 硬體架構圖與相關文件
-│   └── software/                # 系統、資料流程圖與預覽圖
-├── docs/
-│   ├── ble/                     # 通用 BLE 文件
-│   ├── hub8735/                 # HUB8735 韌體與音樂流程
-│   ├── remote_sensor/           # BM7701 感測端文件
-│   └── references/              # 原廠文件與參考資料
-├── external/                    # 第三方 SDK 與函式庫
-├── firmware/
-│   ├── hub8735-ultra/
-│   │   ├── application/
-│   │   ├── examples/
-│   │   └── testdata/
-│   └── n76e003/                 # N76E003 手錶韌體與 BM7701 測試工具
-│       ├── application/
-│       ├── bm7701/              # 模組參考文件
-│       └── scripts/             # UART 與 BLE 測試工具
-├── project/                     # 本機專題文件
-├── tools/                       # 本機開發工具
-├── AGENTS.md                    # 專案工作與架構規則
-└── README.md
+├── apps/                    # 電腦與手機端測試工具（BLE感測模擬器、PPG分析）
+├── assets/                  # 硬體架構圖、系統與資料流程圖
+├── docs/                    # 系統架構、HUB操作與BLE文件、原廠參考資料
+├── external/                # AmebaPro2 SDK與Arduino函式庫
+└── firmware/
+    ├── hub8735-ultra/       # HUB主程式、範例、主機檢查、SD卡內容
+    └── n76e003/             # 手錶韌體、BSP、BM7701測試腳本
 ```
 
-> 本專案僅供專題研究與展示使用，不提供醫療診斷。
+## 開發工具
+
+| 用途 | 工具與版本 |
+| --- | --- |
+| HUB韌體 | Arduino IDE 2.3.10、AmebaPro2板子套件4.1.1、MAX98357函式庫1.1.0（`external/libraries`） |
+| 手錶韌體 | NuEclipse 8051 V1.02.028r、SDCC 4.2.6、Nu-Link燒錄 |
+| BLE感測模擬器 | Flutter 3.44.7（Dart 3.12.2） |
+| 分析與測試腳本 | Python 3.12、g++（MinGW GCC 6.3.0） |
+
+## 重要文件
+
+- [系統架構](docs/ARCHITECTURE.md)：模組分工、資料流與已知落差
+- [HUB操作說明](docs/hub8735/HUB_UI_operation.md)：OLED選單與按鍵操作
+- [心率選曲流程](docs/hub8735/HRMAX_MUSIC_FLOW.md)：心率Zone、目標BPM與曲庫分析
+- [序列埠指令](docs/hub8735/SERIAL_COMMANDS.md)：HUB除錯與控制指令
+- [BLE封包格式](firmware/n76e003/ble-notify-data-format.md)：手錶／綁帶傳給HUB的資料格式
+- [HUB接腳](firmware/hub8735-ultra/pinset.md)：HUB8735 Ultra的接線
+- [SD卡內容](firmware/hub8735-ultra/sd_card/README.md)：歌曲、曲風模型與DEMO音樂
+
+> 僅供專題研究與展示，不提供醫療診斷。
