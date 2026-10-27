@@ -9,11 +9,11 @@
 
 namespace {
 
-// Loudness is heard in dB, so equal percent steps are equal dB steps: 10..100 % -> -30..0 dB, 0 % = mute.
-// Floor picked by ear on the board speakers: the old linear 5 % (-26 dB) should sit near 20 %.
+// Loudness is heard in dB, so equal percent steps are equal dB steps: 10..100 % -> -16.7..0 dB, 0 % = mute.
+// Floor picked by ear on the board speakers: the previous curve's 50 % (-16.7 dB) is now 10 %.
 float volumeGain(uint8_t percent)
 {
-    return percent == 0 ? 0.0f : powf(10.0f, (static_cast<int>(percent) - 100) / 60.0f);
+    return percent == 0 ? 0.0f : powf(10.0f, (static_cast<int>(percent) - 100) / 108.0f);
 }
 
 constexpr const char* TAG = "AUDIO";
@@ -748,6 +748,7 @@ void audioTask(void* parameter)
             (amp.isMp3Playing() || hasBpmWork) ? 0 : portMAX_DELAY;
 
         if (xQueueReceive(audioCmdQueue, &command, waitTicks) == pdPASS) {
+            LOGI(TAG, "OKT 3 audio got %s", audioCommandName(command.command));
             if (command.command == AudioCommandType::Play) {
                 LOGD(TAG, "<- control: Play %s (automatic=%d, songIndex=%d)", command.filename,
                      command.isAutomatic ? 1 : 0, static_cast<int>(command.songIndex));
