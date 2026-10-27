@@ -39,7 +39,7 @@ constexpr int16_t MENU_Y = 16;
 constexpr int16_t DIVIDER_Y = 47;
 constexpr int16_t STATUS_Y[2] = {48, 56};
 
-// Rows depend on the mode: TopGenre in Enjoy / Train, TopSongs only in Manual, TopSongBpm while a library song
+// Rows depend on the mode: TopGenre in Enjoy / Train, TopSongBpm while a library song
 // plays. The Top cursor is a row; topItemAt() maps it to an item.
 enum TopItem : uint8_t {
     TopMode,
@@ -67,7 +67,7 @@ enum class Screen : uint8_t {
     GenreList,     // preferred genre for Enjoy / Train; OK picks it and leaves
     BpmStatus,
     SongList,
-    SongMenu,      // one song: [Play] / BPM x2 / BPM /2 / Back (Play only when opened from SongList)
+    SongMenu,      // one song: [Play] / BPM x2 / BPM /2 / Back (Play only from SongList in Manual)
     BleList,       // Watch / Chest link (OK toggles Auto/Off); Back
     CustomList,    // opened when Top Input reaches Custom: PPG / IMU (OK cycles each); Back
     PowerConfirm,  // Cancel / Power off
@@ -126,7 +126,7 @@ char bpmAnalysisFile[AUDIO_FILENAME_MAX] = "";
 uint32_t lastRefreshMs = 0;
 bool infoBar = true;  // bottom HR / IMU rows; not saved, back on after reboot
 int16_t songMenuIndex = -1;     // musicLibrary index shown in SongMenu
-bool songMenuFromList = false;  // SongMenu opened from SongList (has Play, Back returns to the list)
+bool songMenuFromList = false;  // SongMenu opened from SongList (Back returns to the list)
 enum SongMenuItem : uint8_t { SongPlay, SongDouble, SongHalve, SongBack };
 bool powerOffRequested = false;  // set by the confirm screen, handled in the UITask loop
 uint8_t ageEdit = USER_AGE_DEFAULT;  // value shown while AgeEdit is open
@@ -182,13 +182,15 @@ uint16_t scaledBpm(uint16_t bpm, bool doubled)
     return v >= 30 && v <= 300 ? v : 0;
 }
 
-uint8_t songMenuItemAt(uint16_t row) { return static_cast<uint8_t>(songMenuFromList ? row : row + 1); }
+// Picking a song to play is Manual only; automatic modes can view the list and fix BPM (x2 / /2).
+bool songMenuHasPlay() { return songMenuFromList && playMode == PlayMode::Manual; }
+uint16_t songMenuBackRow() { return songMenuHasPlay() ? 3 : 2; }  // the menu opens on Back
+uint8_t songMenuItemAt(uint16_t row) { return static_cast<uint8_t>(songMenuHasPlay() ? row : row + 1); }
 
 bool topItemVisible(uint8_t item)
 {
     if (item == TopSongBpm) return playingLibraryIndex() >= 0;
     if (item == TopGenre) return playMode == PlayMode::Enjoy || playMode == PlayMode::Train;
-    if (item == TopSongs) return playMode == PlayMode::Manual;
     return true;
 }
 
@@ -216,11 +218,11 @@ uint16_t topRowOf(uint8_t item)
 }
 
 // Entries are added or removed only while musicBpmAnalysisBusy (directory scan, clear); the list
-// is not offered then. Never returns 0 while the list is open (cursor math needs >= 1).
+// is not offered then. Row 0 is Back, row i + 1 is song i (UP from the first song reaches Back).
 uint16_t songCount()
 {
     const size_t n = musicLibrary.count > MUSIC_LIBRARY_MAX ? MUSIC_LIBRARY_MAX : musicLibrary.count;
-    return n == 0 ? 1 : static_cast<uint16_t>(n);
+    return static_cast<uint16_t>(n + 1);
 }
 
 bool bpmAnalysisActive()
@@ -238,7 +240,7 @@ uint16_t itemCount()
     case Screen::BpmStatus: return BPM_STATUS_BACK + 1;
     case Screen::AgeEdit: return 1;
     case Screen::SongList: return songCount();
-    case Screen::SongMenu: return songMenuFromList ? 4 : 3;
+    case Screen::SongMenu: return songMenuHasPlay() ? 4 : 3;
     case Screen::BleList: return 3;
     case Screen::CustomList: return 3;
     case Screen::PowerConfirm: return POWER_CONFIRM_COUNT;
@@ -401,6 +403,32 @@ void startBpmScan(BpmAnalysisMode mode)
     showBpmStatus();
 }
 
+// Long OK: leave the current list one level up without applying its highlighted row.
+void goBack()
+{
+    LOGI(TAG, "OK held: back from %s", screenName(screen));
+    switch (screen) {
+    case Screen::Top: break;
+    case Screen::ModeList: backToTop(TopMode); break;
+    case Screen::PlanList: openList(Screen::ModeList, static_cast<uint8_t>(PlayMode::Train)); break;
+    case Screen::VolumeList: backToTop(TopVolume); break;
+    case Screen::GenreList: backToTop(TopGenre); break;
+    case Screen::AgeEdit: backToTop(TopAge); break;  // the edit is dropped
+    case Screen::BpmStatus: backToTop(TopBpmAnalysis); break;
+    case Screen::SongList: backToTop(TopSongs); break;
+    case Screen::SongMenu:
+        if (songMenuFromList && songMenuIndex >= 0) openList(Screen::SongList, static_cast<uint16_t>(songMenuIndex + 1));
+        else backToTop(songMenuFromList ? TopSongs : TopSongBpm);
+        break;
+    case Screen::BleList: backToTop(TopBle); break;
+    case Screen::CustomList: backToTop(TopInput); break;
+    case Screen::PowerConfirm: backToTop(TopPowerOff); break;
+    case Screen::DebugList: backToTop(TopDebug); break;
+    case Screen::AnalysisList: openList(Screen::DebugList, DebugAnalysis); break;
+    case Screen::AnalysisConfirm: openList(Screen::AnalysisList, analysisConfirmItem); break;
+    }
+}
+
 void activateItem()
 {
     LOGI(TAG, "OK pressed: screen=%s cursor=%u%s%s", screenName(screen), static_cast<unsigned>(cursor),
@@ -440,10 +468,10 @@ void activateItem()
         backToTop(TopBpmAnalysis);  // the scan keeps running in the background
         break;
     case Screen::SongList:
-        if (cursor < musicLibrary.count) {
-            songMenuIndex = static_cast<int16_t>(cursor);
+        if (cursor >= 1 && cursor <= musicLibrary.count) {
+            songMenuIndex = static_cast<int16_t>(cursor - 1);
             songMenuFromList = true;
-            openList(Screen::SongMenu, 0);
+            openList(Screen::SongMenu, songMenuBackRow());
         } else {
             backToTop(TopSongs);
         }
@@ -459,7 +487,7 @@ void activateItem()
             const uint16_t bpm = scaledBpm(musicLibrary.entries[songMenuIndex].bpm, item == SongDouble);
             if (bpm != 0) sendCommand(UiCommandType::SetSongBpm, 0, PlayMode::Enjoy, songMenuIndex, SensorSource::Chest, 0, bpm);
         } else if (songMenuFromList && valid) {
-            openList(Screen::SongList, static_cast<uint16_t>(songMenuIndex));
+            openList(Screen::SongList, static_cast<uint16_t>(songMenuIndex + 1));
         } else {
             backToTop(songMenuFromList ? TopSongs : TopSongBpm);
         }
@@ -528,11 +556,11 @@ void activateItem()
         case TopSongBpm:
             songMenuIndex = playingLibraryIndex();
             songMenuFromList = false;
-            if (songMenuIndex >= 0) openList(Screen::SongMenu, 0);
+            if (songMenuIndex >= 0) openList(Screen::SongMenu, songMenuBackRow());
             break;
         case TopSongs:
             if (musicLibraryReady && !musicBpmAnalysisBusy && musicLibrary.count > 0) {
-                openList(Screen::SongList, 0);
+                openList(Screen::SongList, 1);  // first song
             } else {
                 LOGD(TAG, "song list unavailable (ready=%d busy=%d count=%u)", musicLibraryReady ? 1 : 0,
                      musicBpmAnalysisBusy ? 1 : 0, static_cast<unsigned>(musicLibrary.count));
@@ -623,6 +651,7 @@ void applyUpdate(const UiUpdateElement& update)
         playMode = static_cast<PlayMode>(update.mode);
         trainDone = false;
         if (screen == Screen::Top) cursor = topRowOf(item);
+        if (screen == Screen::SongMenu) cursor = songMenuBackRow();  // the Play row comes and goes with Manual
         break;
     }
     case UiUpdateType::Analysis:
@@ -759,12 +788,12 @@ void itemLabel(uint16_t item, char* out, size_t size)
                  static_cast<unsigned>(206.9f - 0.67f * ageEdit + 0.5f));
         return;
     case Screen::SongList:
-        if (item >= musicLibrary.count) {
-            snprintf(out, size, "(no songs)");
+        if (item == 0 || item > musicLibrary.count) {
+            snprintf(out, size, "Back");
         } else {
             // "001.mp3     136 Ele": 11-column name (cut with '~', the cursor row scrolls), BPM, first 3
             // letters of the genre ("--" when unknown); 19 columns leave the scroll hint at column 20 clear.
-            const MusicEntry& e = musicLibrary.entries[item];
+            const MusicEntry& e = musicLibrary.entries[item - 1];
             char name[12];
             fitText(name, e.file, 11, item == cursor);
             char bpmText[8] = "--";
@@ -1083,6 +1112,9 @@ constexpr uint32_t BOOT_MIN_MS = 3000;
 constexpr uint32_t BOOT_TIMEOUT_MS = 30000;
 constexpr uint32_t POWER_OFF_MS = 1100;
 constexpr uint32_t WAKE_HOLD_MS = 2000;
+constexpr uint32_t BACK_HOLD_MS = 800;
+uint32_t okDownMs = 0;     // OK press start, 0 = not tracking (also after wake, while OK is still held)
+bool okHeldBack = false;   // this press already went back; its release does nothing
 
 // Keep UI state current while an animation or standby owns the loop.
 void drainUpdates()
@@ -1298,10 +1330,22 @@ void UITask(void* parameter) {
                 dirty = true;
             }
         }
+        // OK acts on release; held BACK_HOLD_MS in a sub-screen it goes back instead (Top has nothing to leave).
         if (buttonPressed(buttons[2])) {
-            okPressMs = millis();
-            LOGI(TAG, "OKT 1 OK pressed (screen=%s cursor=%u)", screenName(screen), static_cast<unsigned>(cursor));
-            activateItem();
+            okDownMs = millis();
+            okHeldBack = false;
+        } else if (okDownMs != 0 && !buttons[2].down) {
+            okDownMs = 0;
+            if (!okHeldBack) {
+                okPressMs = millis();
+                LOGI(TAG, "OKT 1 OK pressed (screen=%s cursor=%u)", screenName(screen), static_cast<unsigned>(cursor));
+                activateItem();
+                dirty = true;
+            }
+        } else if (okDownMs != 0 && !okHeldBack && screen != Screen::Top &&
+                   (uint32_t)(millis() - okDownMs) >= BACK_HOLD_MS) {
+            okHeldBack = true;
+            goBack();
             dirty = true;
         }
         if (powerOffRequested) {
