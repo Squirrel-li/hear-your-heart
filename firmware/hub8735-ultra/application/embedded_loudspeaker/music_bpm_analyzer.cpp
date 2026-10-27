@@ -62,7 +62,9 @@ bool MusicBpmAnalyzer::begin(AmebaFatFS& fs, const char* filename)
         LOGE(TAG, "begin: %s (%s)", error_, filename);
         return false;
     }
-    if (!file_.open(path)) {
+    // Read-only (fileType MP3): the default open asks for write access, and FatFS's file lock then
+    // refuses it while the same song is open for playback.
+    if (!file_.open(path, MP3)) {
         error_ = "cannot open MP3";
         LOGE(TAG, "begin: %s: %s", error_, path);
         return false;

@@ -152,7 +152,7 @@ bool MusicGenreClassifier::begin(AmebaFatFS& fs, const char* filename)
         error_ = "MP3 path is too long";
         return false;
     }
-    if (!file_.open(path)) {
+    if (!file_.open(path, MP3)) {  // read-only: see MusicBpmAnalyzer::begin
         error_ = "cannot open MP3";
         return false;
     }
