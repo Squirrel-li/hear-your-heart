@@ -85,4 +85,4 @@ flowchart LR
     E -- "BLE notify<br/>PPG／心率" --> HUB
 ```
 
-單一板子取代 N76E003＋BM7701（見 `docs/ePy_Lite/problems.md`），無 IMU；MAX30103 輸出原始 PPG，心率在板上計算。
+單一板子取代 N76E003＋BM7701，無 IMU；MAX30103 輸出原始 PPG，心率在板上計算。

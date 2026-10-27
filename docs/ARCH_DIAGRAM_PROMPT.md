@@ -31,7 +31,6 @@
 | `docs/remote_sensor/BLE_PROTOCOL_QUICKREF.md`、`firmware/n76e003/ble-notify-data-format.md` | BLE GATT 與 frame 格式 |
 | `docs/remote_sensor/BM7701-00-1_SENSOR_PLAN.md` | 感測端規劃 |
 | `docs/hub8735/YAMNET_GENRE.md` | NPU 曲風分析（提案） |
-| `docs/ePy_Lite/problems.md` | 綁帶端 ePy Lite 方案 |
 | `firmware/hub8735-ultra/application/embedded_loudspeaker/`（`embedded_loudspeaker.ino`、`globalData.h`、`BLETask.cpp`、`analysisTask.cpp`、`ControlTask.cpp`、`audioTask.cpp`、`UITask.cpp`、`localSensor.h`、`music_library.h`、`music_bpm_analyzer.h`、`music_genre_classifier.h`、`song_catalog.h`） | 實際 task／Queue／模組 |
 | `firmware/hub8735-ultra/target_bpm.c/.h` | 心率→目標 BPM 純 C 模組 |
 
