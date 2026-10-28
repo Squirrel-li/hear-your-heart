@@ -40,6 +40,6 @@ hear-your-heart/
 
 ## 授權
 
-本專案以[Apache License 2.0](LICENSE)授權，散布時須保留[NOTICE](NOTICE)。子模組與第三方元件依各自授權。
+本專案為元培醫事科技大學提出、與國立臺北科技大學合作的計畫，版權屬元培醫事科技大學，以[Apache License 2.0](LICENSE)授權，散布時須保留[NOTICE](NOTICE)。子模組與第三方元件依各自授權。
 
 > 僅供專題研究與展示，不提供醫療診斷。
